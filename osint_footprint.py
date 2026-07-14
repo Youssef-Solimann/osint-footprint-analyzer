@@ -27,51 +27,52 @@ TIMEOUT = 6
 HEADERS = {"User-Agent": "Mozilla/5.0 (compatible; OSINT-Footprint-Analyzer/0.1)"}
 
 # --- platform list for username enumeration -------------------------------
-# format: name -> url_template, where {u} is replaced with the target username
+# format: name -> {"url": template, "reliable": bool}, where {u} is replaced
+# with the target username.
 #
-# Split into two reliability tiers based on how each platform serves pages:
+# "reliable" reflects how each platform serves pages:
 #
-# RELIABLE = server-rendered. A missing profile gets a real HTTP 404 from
-# the server itself, so the status code is a trustworthy signal.
+# reliable=True  = server-rendered. A missing profile gets a real HTTP 404
+# from the server itself, so the status code is a trustworthy signal.
 #
-# UNRELIABLE = JavaScript single-page apps (SPAs). The server returns the
+# reliable=False = JavaScript single-page app (SPA). The server returns the
 # same 200 "app shell" for ANY url, real or fake - the actual "does this
 # user exist" check happens client-side via JS after the page loads, which
 # requests.get() never executes. Confirmed empirically: a deliberately
 # fake Instagram username still returned 200. For these platforms a 200
 # is NOT evidence the account exists - only an explicit 404 counts as
 # real signal here.
-RELIABLE_PLATFORMS = {
-    "GitHub":      "https://github.com/{u}",
-    "Reddit":      "https://www.reddit.com/user/{u}",
-    "GitLab":      "https://gitlab.com/{u}",
-    "Medium":      "https://medium.com/@{u}",
-    "Steam":       "https://steamcommunity.com/id/{u}",
-    "HackerNews":  "https://news.ycombinator.com/user?id={u}",
-    "Keybase":     "https://keybase.io/{u}",
-    "Dev.to":      "https://dev.to/{u}",
-    "Docker Hub":  "https://hub.docker.com/u/{u}",
+#
+# One dict instead of two: adding a platform means adding one entry here,
+# not remembering which of two collections it belongs in. Also leaves room
+# to add more per-platform metadata later (e.g. expected_status, notes)
+# without restructuring again.
+PLATFORMS = {
+    "GitHub":      {"url": "https://github.com/{u}",                    "reliable": True},
+    "Reddit":      {"url": "https://www.reddit.com/user/{u}",           "reliable": True},
+    "GitLab":      {"url": "https://gitlab.com/{u}",                    "reliable": True},
+    "Medium":      {"url": "https://medium.com/@{u}",                   "reliable": True},
+    "Steam":       {"url": "https://steamcommunity.com/id/{u}",         "reliable": True},
+    "HackerNews":  {"url": "https://news.ycombinator.com/user?id={u}",  "reliable": True},
+    "Keybase":     {"url": "https://keybase.io/{u}",                    "reliable": True},
+    "Dev.to":      {"url": "https://dev.to/{u}",                        "reliable": True},
+    "Docker Hub":  {"url": "https://hub.docker.com/u/{u}",              "reliable": True},
+    "Twitter/X":   {"url": "https://x.com/{u}",                         "reliable": False},
+    "Instagram":   {"url": "https://www.instagram.com/{u}/",            "reliable": False},
+    "TikTok":      {"url": "https://www.tiktok.com/@{u}",               "reliable": False},
+    "Pinterest":   {"url": "https://www.pinterest.com/{u}/",            "reliable": False},
+    "YouTube":     {"url": "https://www.youtube.com/@{u}",              "reliable": False},
+    "Twitch":      {"url": "https://www.twitch.tv/{u}",                 "reliable": False},
 }
-
-UNRELIABLE_PLATFORMS = {
-    "Twitter/X":   "https://x.com/{u}",
-    "Instagram":   "https://www.instagram.com/{u}/",
-    "TikTok":      "https://www.tiktok.com/@{u}",
-    "Pinterest":   "https://www.pinterest.com/{u}/",
-    "YouTube":     "https://www.youtube.com/@{u}",
-    "Twitch":      "https://www.twitch.tv/{u}",
-}
-
-PLATFORMS = {**RELIABLE_PLATFORMS, **UNRELIABLE_PLATFORMS}
 
 
 def check_username(username):
     print(f"\n[*] Checking username '{username}' across {len(PLATFORMS)} platforms...")
     # every platform lands in exactly one bucket - nothing gets silently dropped anymore.
     results = {"found": [], "not_found": [], "unclear": [], "error": []}
-    for name, url_template in PLATFORMS.items():
-        url = url_template.format(u=username)
-        is_reliable = name in RELIABLE_PLATFORMS
+    for name, platform_info in PLATFORMS.items():
+        url = platform_info["url"].format(u=username)
+        is_reliable = platform_info["reliable"]
         try:
             r = requests.get(url, headers=HEADERS, timeout=TIMEOUT, allow_redirects=True)
             entry = {"platform": name, "url": url, "status": r.status_code}
@@ -90,13 +91,117 @@ def check_username(username):
             else:
                 # unclear = could be a block (403), rate limit, redirect quirk, etc.
                 # NOT the same as "not found" - the account may well exist, we just can't tell.
-                print(f"    [?] {name:12s} status={r.status_code} (unclear - likely blocked, not confirmed absent) {url}")
+                # give a specific reason per known status code so downstream logic
+                # (risk scoring, correlation) doesn't have to re-derive it from a raw number.
+                if r.status_code == 403:
+                    reason = "HTTP 403 Forbidden - likely anti-bot block, not evidence of absence"
+                elif r.status_code == 429:
+                    reason = "HTTP 429 Too Many Requests - rate limited, try again later"
+                elif 500 <= r.status_code < 600:
+                    reason = f"HTTP {r.status_code} - platform server error, not related to this username"
+                else:
+                    reason = f"HTTP {r.status_code} - unrecognized status, not confirmed absent"
+                print(f"    [?] {name:12s} status={r.status_code} (unclear - {reason}) {url}")
+                entry["reason"] = reason
                 results["unclear"].append(entry)
         except requests.exceptions.RequestException as e:
             print(f"    [!] {name:12s} error: {e.__class__.__name__}")
-            results["error"].append({"platform": name, "url": url, "error": e.__class__.__name__})
+            results["error"].append({
+                "platform": name,
+                "url": url,
+                "reason": f"Request failed: {e.__class__.__name__}",
+            })
         time.sleep(0.3)  # don't hammer, be polite
     return results
+
+
+def check_subdomains(domain):
+    """
+    Passive subdomain enumeration via crt.sh (Certificate Transparency logs).
+    Every HTTPS cert issued gets publicly logged - we're just reading those
+    logs, never touching the target's own infrastructure directly.
+
+    Returns a dict, not a bare list - an empty subdomains list should only
+    ever mean "genuinely found none", never "the lookup failed". success/
+    reason distinguish "we looked and found nothing" from "we couldn't
+    look" (rate limited, service down, network error, bad response), same
+    philosophy as the found/not_found/unclear/error split in
+    check_username().
+    """
+    print(f"\n[*] Searching Certificate Transparency logs for '{domain}' subdomains...")
+    # status starts as None: we may fail before ever getting an HTTP response
+    # at all (e.g. connection error), in which case there's no status code to
+    # report - that's meaningfully different from "we got a bad status code".
+    result = {"success": False, "status": None, "source": "crt.sh", "reason": None, "subdomains": []}
+    try:
+        # crt.sh can be slow under load, give it more room than our normal TIMEOUT
+        url = f"https://crt.sh/?q=%.{domain}&output=json"
+        r = requests.get(url, headers=HEADERS, timeout=15)
+        result["status"] = r.status_code  # got a response, so we always have a status now
+
+        # inspect the status ourselves instead of raise_for_status(), so we
+        # can give a specific reason per case rather than one generic
+        # "HTTPError" for every non-2xx response.
+        if r.status_code == 429:
+            result["reason"] = "HTTP 429 Too Many Requests - crt.sh rate limited us, try again later"
+            print(f"    [!] {result['reason']}")
+            return result
+        elif r.status_code == 503:
+            result["reason"] = "HTTP 503 Service Unavailable - crt.sh is temporarily down"
+            print(f"    [!] {result['reason']}")
+            return result
+        elif r.status_code != 200:
+            result["reason"] = f"HTTP {r.status_code} - unexpected response from crt.sh"
+            print(f"    [!] {result['reason']}")
+            return result
+
+        entries = r.json()
+        subdomains = set()
+        for entry in entries:
+            # name_value can contain multiple names separated by newlines
+            # (one cert can cover several subdomains via SAN)
+            names = entry.get("name_value", "").split("\n")
+            for name in names:
+                name = name.strip().lower()
+                if name.startswith("*."):
+                    name = name[2:]  # strip wildcard prefix
+                if name.endswith(domain):
+                    subdomains.add(name)
+
+        subdomains_list = sorted(subdomains)
+        result["success"] = True
+        result["subdomains"] = subdomains_list
+        print(f"    [+] Found {len(subdomains_list)} unique subdomains")
+        for s in subdomains_list[:20]:  # don't flood the console on huge results
+            print(f"        {s}")
+        if len(subdomains_list) > 20:
+            print(f"        ... and {len(subdomains_list) - 20} more (see JSON output)")
+        return result
+
+    except requests.exceptions.RequestException as e:
+        result["reason"] = f"Request failed: {e.__class__.__name__}"
+        print(f"    [!] crt.sh request failed: {result['reason']}")
+        return result
+    except ValueError as e:
+        # crt.sh returns HTML instead of JSON when it's overloaded/rate limiting
+        result["reason"] = f"crt.sh returned a non-JSON response (likely overloaded): {e}"
+        print(f"    [!] {result['reason']}")
+        return result
+
+
+def _normalize_whois_value(value):
+    """
+    python-whois is inconsistent about return types: some registrars give a
+    single value (str/datetime) for a field, others give a list containing
+    the same field repeated across multiple WHOIS records for that domain.
+    Without this, str(value) on a list produces an ugly
+    "[datetime.datetime(...), datetime.datetime(...)]" string instead of a
+    clean date. Normalize to a single value (the first entry) so callers
+    never have to guess which shape they're getting.
+    """
+    if isinstance(value, list):
+        return value[0] if value else None
+    return value
 
 
 def check_domain(domain):
@@ -116,10 +221,13 @@ def check_domain(domain):
     try:
         import whois as whois_lib
         w = whois_lib.whois(domain)
-        result["registrar"] = str(w.registrar) if w.registrar else None
-        result["creation_date"] = str(w.creation_date)
-        result["expiration_date"] = str(w.expiration_date)
-        result["name_servers"] = w.name_servers
+        registrar = _normalize_whois_value(w.registrar)
+        creation_date = _normalize_whois_value(w.creation_date)
+        expiration_date = _normalize_whois_value(w.expiration_date)
+        result["registrar"] = str(registrar) if registrar else None
+        result["creation_date"] = str(creation_date) if creation_date else None
+        result["expiration_date"] = str(expiration_date) if expiration_date else None
+        result["name_servers"] = w.name_servers  # naturally a list already, left as-is
         print(f"    [+] Registrar: {result['registrar']}")
         print(f"    [+] Created:   {result['creation_date']}")
         print(f"    [+] Expires:   {result['expiration_date']}")
@@ -144,6 +252,9 @@ def check_domain(domain):
             print(f"    [-] Security headers missing: {missing}")
     except requests.exceptions.RequestException as e:
         print(f"    [!] Could not fetch site headers: {e}")
+
+    # subdomain enumeration via Certificate Transparency logs
+    result["subdomains"] = check_subdomains(domain)
 
     return result
 
