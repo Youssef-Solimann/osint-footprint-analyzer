@@ -27,45 +27,76 @@ TIMEOUT = 6
 HEADERS = {"User-Agent": "Mozilla/5.0 (compatible; OSINT-Footprint-Analyzer/0.1)"}
 
 # --- platform list for username enumeration -------------------------------
-# format: name -> (url_template, "not found" indicator string OR None if status code is enough)
-PLATFORMS = {
+# format: name -> url_template, where {u} is replaced with the target username
+#
+# Split into two reliability tiers based on how each platform serves pages:
+#
+# RELIABLE = server-rendered. A missing profile gets a real HTTP 404 from
+# the server itself, so the status code is a trustworthy signal.
+#
+# UNRELIABLE = JavaScript single-page apps (SPAs). The server returns the
+# same 200 "app shell" for ANY url, real or fake - the actual "does this
+# user exist" check happens client-side via JS after the page loads, which
+# requests.get() never executes. Confirmed empirically: a deliberately
+# fake Instagram username still returned 200. For these platforms a 200
+# is NOT evidence the account exists - only an explicit 404 counts as
+# real signal here.
+RELIABLE_PLATFORMS = {
     "GitHub":      "https://github.com/{u}",
-    "Twitter/X":   "https://x.com/{u}",
-    "Instagram":   "https://www.instagram.com/{u}/",
     "Reddit":      "https://www.reddit.com/user/{u}",
-    "TikTok":      "https://www.tiktok.com/@{u}",
     "GitLab":      "https://gitlab.com/{u}",
     "Medium":      "https://medium.com/@{u}",
-    "Pinterest":   "https://www.pinterest.com/{u}/",
     "Steam":       "https://steamcommunity.com/id/{u}",
     "HackerNews":  "https://news.ycombinator.com/user?id={u}",
     "Keybase":     "https://keybase.io/{u}",
     "Dev.to":      "https://dev.to/{u}",
-    "YouTube":     "https://www.youtube.com/@{u}",
-    "Twitch":      "https://www.twitch.tv/{u}",
     "Docker Hub":  "https://hub.docker.com/u/{u}",
 }
+
+UNRELIABLE_PLATFORMS = {
+    "Twitter/X":   "https://x.com/{u}",
+    "Instagram":   "https://www.instagram.com/{u}/",
+    "TikTok":      "https://www.tiktok.com/@{u}",
+    "Pinterest":   "https://www.pinterest.com/{u}/",
+    "YouTube":     "https://www.youtube.com/@{u}",
+    "Twitch":      "https://www.twitch.tv/{u}",
+}
+
+PLATFORMS = {**RELIABLE_PLATFORMS, **UNRELIABLE_PLATFORMS}
 
 
 def check_username(username):
     print(f"\n[*] Checking username '{username}' across {len(PLATFORMS)} platforms...")
-    found = []
+    # every platform lands in exactly one bucket - nothing gets silently dropped anymore.
+    results = {"found": [], "not_found": [], "unclear": [], "error": []}
     for name, url_template in PLATFORMS.items():
         url = url_template.format(u=username)
+        is_reliable = name in RELIABLE_PLATFORMS
         try:
             r = requests.get(url, headers=HEADERS, timeout=TIMEOUT, allow_redirects=True)
-            # crude heuristic: 200 = probably exists, 404 = doesn't. some sites lie, whatever, v0.1.
-            if r.status_code == 200:
-                print(f"    [+] {name:12s} FOUND     {url}")
-                found.append({"platform": name, "url": url, "status": r.status_code})
-            elif r.status_code == 404:
+            entry = {"platform": name, "url": url, "status": r.status_code}
+            if r.status_code == 404:
+                # a real 404 is trustworthy on every platform, reliable or not
                 print(f"    [-] {name:12s} not found")
+                results["not_found"].append(entry)
+            elif r.status_code == 200 and is_reliable:
+                print(f"    [+] {name:12s} FOUND     {url}")
+                results["found"].append(entry)
+            elif r.status_code == 200 and not is_reliable:
+                # SPA platform: 200 just means "the app loaded", not "user exists"
+                print(f"    [?] {name:12s} status=200 but SPA platform - not confirmed, verify manually  {url}")
+                entry["reason"] = "SPA platform: HTTP 200 does not confirm account existence"
+                results["unclear"].append(entry)
             else:
-                print(f"    [?] {name:12s} status={r.status_code} (unclear) {url}")
+                # unclear = could be a block (403), rate limit, redirect quirk, etc.
+                # NOT the same as "not found" - the account may well exist, we just can't tell.
+                print(f"    [?] {name:12s} status={r.status_code} (unclear - likely blocked, not confirmed absent) {url}")
+                results["unclear"].append(entry)
         except requests.exceptions.RequestException as e:
             print(f"    [!] {name:12s} error: {e.__class__.__name__}")
+            results["error"].append({"platform": name, "url": url, "error": e.__class__.__name__})
         time.sleep(0.3)  # don't hammer, be polite
-    return found
+    return results
 
 
 def check_domain(domain):
