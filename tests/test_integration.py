@@ -210,7 +210,7 @@ def test_full_pipeline_end_to_end(tmp_path, monkeypatch, fake_response):
     # --- HTML report: every section rendered, key findings visible ---
     html_out = html_path.read_text()
     assert html_out.strip().startswith("<!doctype html>")
-    for section_id in ("risk", "correlations", "username", "domain", "email", "exif", "dorks"):
+    for section_id in ("summary", "risk", "correlations", "username", "domain", "email", "exif", "dorks"):
         assert f'id="{section_id}"' in html_out
     assert "Example Breach" in html_out
     assert "janedoe.janedoe.dev" in html_out
@@ -220,6 +220,18 @@ def test_full_pipeline_end_to_end(tmp_path, monkeypatch, fake_response):
     assert "v=DMARC1; p=reject" in html_out
     assert "/admin" in html_out
     assert "security@janedoe.dev" in html_out
+
+    # --- executive summary reflects every category that ran ---
+    assert "confirmed" in html_out and "unclear" in html_out  # username line
+    assert "security headers present" in html_out
+    assert "known breach(es)" in html_out
+    assert "GPS coordinates found" in html_out
+
+    # --- GPS warning box and footer ---
+    assert 'class="gps-warning"' in html_out
+    assert "strip EXIF metadata" in html_out
+    assert 'class="report-footer"' in html_out
+    assert "OSINT Footprint Analyzer v" in html_out
 
     for tag in ("section", "div", "table", "ul", "details", "aside", "main", "svg"):
         opens = len(re.findall(rf"<{tag}\b", html_out))

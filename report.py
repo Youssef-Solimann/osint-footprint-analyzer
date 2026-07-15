@@ -22,6 +22,8 @@ the Python side needing to know which theme is active.
 import html
 from urllib.parse import quote as url_quote
 
+import utils
+
 _SEVERITY_COLORS = {
     "Low": "var(--sev-low)", "Medium": "var(--sev-medium)",
     "High": "var(--sev-high)", "Critical": "var(--sev-critical)",
@@ -30,14 +32,14 @@ _CONFIDENCE_COLORS = {
     "High": "var(--conf-high)", "Medium": "var(--conf-medium)", "Low": "var(--conf-low)",
 }
 _SECTION_LABELS = {
-    "risk": "Assessment", "correlations": "Correlations", "username": "Username",
-    "domain": "Domain", "email": "Email", "exif": "Image", "dorks": "Dorks",
+    "summary": "Summary", "risk": "Assessment", "correlations": "Correlations",
+    "username": "Username", "domain": "Domain", "email": "Email", "exif": "Image", "dorks": "Dorks",
 }
 
 _REPORT_CSS = """
 :root {
   --bg: #f2f4f1; --panel: #fbfcfa; --hairline: #d7dcd3; --fg: #16211f; --muted: #5c6960;
-  --accent: #0f6e5c; --ok: #2f9e44; --bad: #b42318;
+  --accent: #0f6e5c; --ok: #2f9e44; --bad: #b42318; --bad-bg: #fdecea;
   --sev-low: #2f9e44; --sev-medium: #b8860b; --sev-high: #c2610c; --sev-critical: #b42318;
   --conf-high: #0f6e5c; --conf-medium: #b8860b; --conf-low: #5c6960;
   --mono: ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
@@ -46,20 +48,20 @@ _REPORT_CSS = """
 @media (prefers-color-scheme: dark) {
   :root {
     --bg: #101513; --panel: #171d1b; --hairline: #2a332f; --fg: #e7ece9; --muted: #93a39b;
-    --accent: #35b897; --ok: #51cf66; --bad: #ff6b6b;
+    --accent: #35b897; --ok: #51cf66; --bad: #ff6b6b; --bad-bg: #2a1512;
     --sev-low: #51cf66; --sev-medium: #e0b341; --sev-high: #ff922b; --sev-critical: #ff6b6b;
     --conf-high: #35b897; --conf-medium: #e0b341; --conf-low: #93a39b;
   }
 }
 :root[data-theme="dark"] {
   --bg: #101513; --panel: #171d1b; --hairline: #2a332f; --fg: #e7ece9; --muted: #93a39b;
-  --accent: #35b897; --ok: #51cf66; --bad: #ff6b6b;
+  --accent: #35b897; --ok: #51cf66; --bad: #ff6b6b; --bad-bg: #2a1512;
   --sev-low: #51cf66; --sev-medium: #e0b341; --sev-high: #ff922b; --sev-critical: #ff6b6b;
   --conf-high: #35b897; --conf-medium: #e0b341; --conf-low: #93a39b;
 }
 :root[data-theme="light"] {
   --bg: #f2f4f1; --panel: #fbfcfa; --hairline: #d7dcd3; --fg: #16211f; --muted: #5c6960;
-  --accent: #0f6e5c; --ok: #2f9e44; --bad: #b42318;
+  --accent: #0f6e5c; --ok: #2f9e44; --bad: #b42318; --bad-bg: #fdecea;
   --sev-low: #2f9e44; --sev-medium: #b8860b; --sev-high: #c2610c; --sev-critical: #b42318;
   --conf-high: #0f6e5c; --conf-medium: #b8860b; --conf-low: #5c6960;
 }
@@ -165,6 +167,18 @@ details.value-details[open] summary { margin-bottom: 0.35rem; display: block; }
 details.value-details .raw-text { margin-top: 0.35rem; }
 li.breach { border-bottom: 1px solid var(--hairline); padding: 0.6rem 0; font-size: 0.88rem; }
 li.breach:last-child { border-bottom: none; }
+.gps-warning {
+  background: var(--bad-bg); border: 1px solid var(--bad); border-radius: 8px;
+  padding: 1rem 1.25rem; margin-top: 0.75rem;
+}
+.gps-warning-title { margin: 0 0 0.6rem; color: var(--bad); font-weight: 700; font-size: 0.9rem; }
+.gps-warning table.kv { background: transparent; }
+.gps-warning table.kv tr:nth-child(even) td { background: rgba(127, 127, 127, 0.1); }
+.gps-warning p:last-child { margin-bottom: 0; }
+.report-footer {
+  max-width: 1080px; margin: 1rem auto 0; padding: 1.5rem 1.5rem 2.5rem;
+  text-align: center; color: var(--muted); font-size: 0.78rem; border-top: 1px solid var(--hairline);
+}
 @media (max-width: 860px) {
   .report { grid-template-columns: 1fr; }
   .sidebar { position: static; }
@@ -249,6 +263,66 @@ def _html_sidebar(report, nav_html):
       <div class="meta">Generated {generated_at}</div>
     </aside>
     """
+
+
+def _html_executive_summary_section(report):
+    """
+    A 30-second-scan rollup at the top of the report, one line per
+    category that actually ran - reads only from data every other
+    section already computed, adds nothing new. Skips a category
+    entirely rather than showing a fabricated "n/a" when it wasn't
+    part of this scan, same philosophy as the correlations section
+    skipping single-identifier runs.
+    """
+    rows = []
+
+    username_results = report.get("username_results")
+    if username_results:
+        found = len(username_results.get("found", []))
+        unclear = len(username_results.get("unclear", []))
+        rows.append(("Username", f"{found} confirmed, {unclear} unclear"))
+
+    domain_results = report.get("domain_results")
+    if domain_results:
+        present = domain_results.get("security_headers_present", {})
+        missing = domain_results.get("security_headers_missing", [])
+        total_headers = len(present) + len(missing)
+        if total_headers:
+            rows.append(("Domain", f"{len(present)}/{total_headers} security headers present"))
+        subdomain_info = domain_results.get("subdomains", {})
+        if isinstance(subdomain_info, dict) and subdomain_info.get("success"):
+            rows.append(("Subdomains", f"{len(subdomain_info.get('subdomains', []))} found"))
+
+    email_results = report.get("email_results")
+    if email_results:
+        hibp = email_results.get("hibp", {})
+        if hibp.get("checked"):
+            breach_count = len(hibp.get("breaches", []))
+            rows.append(("Email", f"{breach_count} known breach(es)" if breach_count else "No known breaches"))
+        else:
+            rows.append(("Email", "Breach check not performed"))
+
+    exif_results = report.get("exif_results")
+    if exif_results:
+        if exif_results.get("gps"):
+            rows.append(("Image", "GPS coordinates found"))
+        elif exif_results.get("has_exif"):
+            rows.append(("Image", "No GPS data"))
+        else:
+            rows.append(("Image", "No EXIF data"))
+
+    risk = report.get("risk_score")
+    if risk:
+        rows.append(("Overall risk", f"{risk['score']}/{risk['max_score']} ({risk['severity']})"))
+
+    if not rows:
+        return ""
+
+    row_html = "".join(
+        f"<tr><td>{html.escape(label)}</td><td>{html.escape(value)}</td></tr>" for label, value in rows
+    )
+    body = f'<div class="table-wrap"><table class="kv">{row_html}</table></div>'
+    return _panel("summary", "Executive Summary", body)
 
 
 def _html_risk_section(risk):
@@ -526,10 +600,17 @@ def _html_exif_section(results):
     if gps:
         dot = "var(--sev-high)"
         maps_url = html.escape(gps["maps_url"])
-        gps_html = (
-            f'<p class="bad">GPS location found: {gps["latitude"]}, {gps["longitude"]} - '
-            f'<a href="{maps_url}" target="_blank" rel="noopener">view on map</a></p>'
-        )
+        gps_html = f"""
+        <div class="gps-warning">
+          <p class="gps-warning-title">Exact location embedded in image</p>
+          <table class="kv">
+            <tr><td>Latitude</td><td>{gps["latitude"]}</td></tr>
+            <tr><td>Longitude</td><td>{gps["longitude"]}</td></tr>
+          </table>
+          <p><a href="{maps_url}" target="_blank" rel="noopener">View on map</a></p>
+          <p class="muted small">Recommendation: strip EXIF metadata before sharing this photo publicly.</p>
+        </div>
+        """
 
     body = f'<div class="table-wrap"><table class="kv">{rows}</table></div>{gps_html}{warnings_html}'
     return _panel("exif", "Image Metadata (EXIF)", body, dot_color=dot)
@@ -547,8 +628,17 @@ def _html_dorks_section(dorks):
     return _panel("dorks", "Suggested Manual Dorks", body)
 
 
+def _html_footer():
+    return f"""
+    <footer class="report-footer">
+      <p>Generated by OSINT Footprint Analyzer v{utils.VERSION} &middot; Local analysis</p>
+    </footer>
+    """
+
+
 def generate_html_report(report):
     section_defs = [
+        ("summary", _html_executive_summary_section(report)),
         ("risk", _html_risk_section(report.get("risk_score"))),
         ("correlations", _html_correlations_section(report.get("correlations"))),
         ("username", _html_username_section(report.get("username_results"))),
@@ -561,6 +651,7 @@ def generate_html_report(report):
     nav_html = "".join(f'<a href="#{sid}">{_SECTION_LABELS[sid]}</a>' for sid in present)
     main_content = "\n".join(content for _, content in section_defs if content)
     sidebar = _html_sidebar(report, nav_html)
+    footer = _html_footer()
 
     return f"""<!doctype html>
 <html lang="en">
@@ -579,6 +670,7 @@ def generate_html_report(report):
 {main_content}
 </main>
 </div>
+{footer}
 </body>
 </html>
 """

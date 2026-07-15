@@ -8,8 +8,10 @@ import time
 
 import requests
 
+VERSION = "1.0.0"
+
 TIMEOUT = 6
-HEADERS = {"User-Agent": "Mozilla/5.0 (compatible; OSINT-Footprint-Analyzer/0.1)"}
+HEADERS = {"User-Agent": f"Mozilla/5.0 (compatible; OSINT-Footprint-Analyzer/{VERSION})"}
 
 MAX_RETRIES = 2       # retry attempts after the initial request, on 429 only
 MAX_BACKOFF_WAIT = 15  # cap how long we'll ever sleep for one retry, seconds

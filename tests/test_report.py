@@ -1,5 +1,6 @@
 import re
 
+import utils
 from correlation import correlate_findings
 from report import _collapsible_value, generate_html_report
 from risk import calculate_risk
@@ -290,3 +291,86 @@ def test_full_report_renders_and_balances_tags():
     assert 'id="correlations"' in html_out
     assert "janedoe.janedoe.dev" in html_out
     assert str(report["risk_score"]["score"]) in html_out
+
+
+# --- executive summary ------------------------------------------------
+
+def test_executive_summary_absent_when_nothing_was_checked():
+    html_out = generate_html_report({"target": {}})
+    assert 'id="summary"' not in html_out
+
+
+def test_executive_summary_summarizes_each_checked_category():
+    report = {
+        "target": {"username": "alice", "domain": "example.com", "email": "alice@example.com", "image": "photo.jpg"},
+        "username_results": {"found": [{"platform": "GitHub"}, {"platform": "GitLab"}], "unclear": [{"platform": "X"}], "not_found": [], "error": []},
+        "domain_results": {
+            "security_headers_present": {"Strict-Transport-Security": "max-age=1"},
+            "security_headers_missing": ["Content-Security-Policy"],
+            "subdomains": {"success": True, "subdomains": ["a.example.com", "b.example.com"]},
+        },
+        "email_results": {"email": "alice@example.com", "hibp": {"checked": True, "breaches": [{"name": "X"}]}},
+        "exif_results": {"has_exif": True, "gps": {"latitude": 1.0, "longitude": 2.0, "maps_url": "https://maps.example/?q=1,2"}},
+        "risk_score": {"score": 42, "max_score": 100, "severity": "Medium", "triggered_rules": []},
+    }
+    html_out = generate_html_report(report)
+    assert 'id="summary"' in html_out
+    assert "2 confirmed, 1 unclear" in html_out
+    assert "1/2 security headers present" in html_out
+    assert "2 found" in html_out  # subdomains
+    assert "1 known breach(es)" in html_out
+    assert "GPS coordinates found" in html_out
+    assert "42/100 (Medium)" in html_out
+
+
+def test_executive_summary_email_not_checked_says_so():
+    report = {
+        "target": {"email": "alice@example.com"},
+        "email_results": {"email": "alice@example.com", "hibp": {"checked": False}},
+    }
+    html_out = generate_html_report(report)
+    assert "Breach check not performed" in html_out
+
+
+def test_executive_summary_no_gps_says_so():
+    report = {
+        "target": {"image": "photo.jpg"},
+        "exif_results": {"has_exif": True, "gps": None},
+    }
+    html_out = generate_html_report(report)
+    assert "No GPS data" in html_out
+
+
+# --- GPS warning box ---------------------------------------------------
+
+def test_gps_warning_box_shows_coordinates_and_recommendation():
+    report = {
+        "target": {"image": "photo.jpg"},
+        "exif_results": {"has_exif": True, "gps": {
+            "latitude": 30.080972, "longitude": 31.344928, "maps_url": "https://maps.example/?q=30,31",
+        }},
+    }
+    html_out = generate_html_report(report)
+    assert 'class="gps-warning"' in html_out
+    assert "Exact location embedded in image" in html_out
+    assert "30.080972" in html_out
+    assert "31.344928" in html_out
+    assert "strip EXIF metadata" in html_out
+
+
+def test_no_gps_no_warning_box():
+    report = {
+        "target": {"image": "photo.jpg"},
+        "exif_results": {"has_exif": True, "gps": None},
+    }
+    html_out = generate_html_report(report)
+    assert 'class="gps-warning"' not in html_out
+
+
+# --- footer --------------------------------------------------------------
+
+def test_footer_shows_tool_name_and_version():
+    html_out = generate_html_report({"target": {}})
+    assert 'class="report-footer"' in html_out
+    assert f"OSINT Footprint Analyzer v{utils.VERSION}" in html_out
+    assert "Local analysis" in html_out
