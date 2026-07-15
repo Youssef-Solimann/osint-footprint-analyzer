@@ -33,6 +33,15 @@ source .venv/bin/activate
 pip install -r requirements.txt
 ```
 
+## Running tests
+
+```bash
+pip install -r requirements-dev.txt
+pytest
+```
+
+92 tests covering the pure logic (risk scoring, correlation engine, WHOIS/EXIF parsing) and the networked checks (username enumeration, DNS, WHOIS, HIBP) via mocked requests — nothing hits the network during the test run.
+
 ## Usage
 
 ```bash
