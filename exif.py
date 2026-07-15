@@ -35,6 +35,18 @@ def extract_exif(image_path):
         return result
 
     try:
+        # Pillow has no built-in HEIC/HEIF support (the default format for
+        # iPhone photos since iOS 11) - this registers a HEIF opener so
+        # Image.open() below can read them like any other format. Optional:
+        # if pillow-heif isn't installed, HEIC files just fail to open below
+        # with the normal "could not open image" path, same as any other
+        # unsupported format.
+        import pillow_heif
+        pillow_heif.register_heif_opener()
+    except ImportError:
+        pass
+
+    try:
         img = Image.open(image_path)
     except FileNotFoundError:
         print(f"    [!] File not found: {image_path}")

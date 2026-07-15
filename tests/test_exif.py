@@ -112,3 +112,28 @@ def test_south_and_west_refs_negate_coordinates(tmp_path):
     result = mod.extract_exif(str(path))
     assert result["gps"]["latitude"] < 0
     assert result["gps"]["longitude"] < 0
+
+
+def test_heic_file_with_camera_and_gps(tmp_path):
+    # HEIC is the default photo format on iPhones since iOS 11 - Pillow
+    # can't open it at all without pillow-heif registering an opener for
+    # it, so this is the real-world case that matters most for this tool.
+    path = tmp_path / "iphone_photo.heic"
+    img = Image.new("RGB", (32, 32), color="red")
+    exif = Image.Exif()
+    exif[Base.Make.value] = "Apple"
+    exif[Base.Model.value] = "iPhone 15 Pro"
+    exif.get_ifd(IFD.Exif)[Base.DateTimeOriginal.value] = "2026:07:16 10:00:00"
+    gps_ifd = exif.get_ifd(IFD.GPSInfo)
+    gps_ifd[1] = "N"
+    gps_ifd[2] = (IFDRational(40, 1), IFDRational(44, 1), IFDRational(54, 1))
+    gps_ifd[3] = "W"
+    gps_ifd[4] = (IFDRational(73, 1), IFDRational(59, 1), IFDRational(8, 1))
+    img.save(path, format="HEIF", exif=exif)
+
+    result = mod.extract_exif(str(path))
+    assert result["has_exif"] is True
+    assert result["camera_make"] == "Apple"
+    assert result["camera_model"] == "iPhone 15 Pro"
+    assert result["gps"]["latitude"] == pytest.approx(40.7483, abs=1e-3)
+    assert result["gps"]["longitude"] == pytest.approx(-73.9856, abs=1e-3)
