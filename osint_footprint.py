@@ -14,12 +14,14 @@ Usage:
 """
 
 import argparse
+import html
 import json
 import os
 import re
 import sys
 import time
 from datetime import datetime
+from urllib.parse import quote as url_quote
 
 import requests
 
@@ -208,14 +210,17 @@ def check_username(username):
                 print(f"    [?] {name:12s} status={r.status_code} (unclear - {reason}) {url}")
                 entry["reason"] = reason
                 results["unclear"].append(entry)
+            time.sleep(0.3)  # don't hammer, be polite - only between actual completed requests
         except requests.exceptions.RequestException as e:
+            # no pacing sleep here: a timeout/connection failure already burned
+            # up to TIMEOUT seconds with no successful hit on the server, so
+            # there's nothing left to be "polite" about waiting on
             print(f"    [!] {name:12s} error: {e.__class__.__name__}")
             results["error"].append({
                 "platform": name,
                 "url": url,
                 "reason": f"Request failed: {e.__class__.__name__}",
             })
-        time.sleep(0.3)  # don't hammer, be polite
     return results
 
 
@@ -373,9 +378,34 @@ def check_domain(domain):
         result["creation_date"] = str(creation_date) if creation_date else None
         result["expiration_date"] = str(expiration_date) if expiration_date else None
         result["name_servers"] = w.name_servers  # naturally a list already, left as-is
+
+        # registrant contact fields - often redacted by privacy proxies, but
+        # when present these are exactly what the correlation engine needs
+        # to link a domain back to a specific person. w.emails can return a
+        # single string, a list, or None depending on the registrar's WHOIS
+        # format, so normalize to a list here rather than in the caller.
+        registrant_name = _normalize_whois_value(w.name)
+        registrant_org = _normalize_whois_value(w.org)
+        emails = w.emails
+        if emails is None:
+            registrant_emails = []
+        elif isinstance(emails, list):
+            registrant_emails = emails
+        else:
+            registrant_emails = [emails]
+        result["registrant_name"] = str(registrant_name) if registrant_name else None
+        result["registrant_org"] = str(registrant_org) if registrant_org else None
+        result["registrant_emails"] = registrant_emails
+
         print(f"    [+] Registrar: {result['registrar']}")
         print(f"    [+] Created:   {result['creation_date']}")
         print(f"    [+] Expires:   {result['expiration_date']}")
+        if result["registrant_name"]:
+            print(f"    [+] Registrant name: {result['registrant_name']}")
+        if result["registrant_org"]:
+            print(f"    [+] Registrant org:  {result['registrant_org']}")
+        if registrant_emails:
+            print(f"    [+] Registrant email(s): {', '.join(registrant_emails)}")
     except ImportError:
         print("    [!] python-whois not installed, skipping WHOIS. Run: pip install python-whois")
         result["whois"] = "SKIPPED - install python-whois"
@@ -385,7 +415,7 @@ def check_domain(domain):
 
     # basic security headers check on the site
     try:
-        r = requests.get(f"https://{domain}", headers=HEADERS, timeout=TIMEOUT)
+        r = _get_with_retry(f"https://{domain}")
         sec_headers = ["Strict-Transport-Security", "Content-Security-Policy",
                        "X-Frame-Options", "X-Content-Type-Options"]
         present = {h: r.headers.get(h) for h in sec_headers if h in r.headers}
@@ -634,6 +664,104 @@ def generate_dorks(username=None, domain=None, email=None):
     return dorks
 
 
+# --- identifier correlation engine ------------------------------------------
+# Cross-references the identifiers the user supplied (username/domain/email)
+# against data the other checks already collected, to surface direct
+# ownership/identity links a human analyst would otherwise have to spot by
+# hand (e.g. "this domain's WHOIS email is the same email you're
+# investigating"). Deliberately narrow for v1: every rule here requires a
+# direct, literal match between two independently-supplied identifiers.
+# Weaker heuristics (e.g. "photo timestamp is close to the domain's
+# registration date") are left out on purpose, so every finding is backed by
+# real evidence rather than a guess. Makes no network requests of its own -
+# purely reads what check_username()/check_domain()/check_email() already
+# collected in `report`.
+def correlate_findings(report):
+    findings = []
+    target = report.get("target", {})
+    username = target.get("username")
+    domain = target.get("domain")
+    email_results = report.get("email_results") or {}
+    domain_results = report.get("domain_results") or {}
+
+    email = email_results.get("email")
+
+    # --- email's domain matches the domain being scanned ---
+    if email and email_results.get("format_valid") and domain and "@" in email:
+        email_domain = email.split("@", 1)[1].lower()
+        scanned_domain = domain.lower()
+        if email_domain == scanned_domain or email_domain.endswith("." + scanned_domain):
+            findings.append({
+                "type": "email_domain_matches_scanned_domain",
+                "confidence": "High",
+                "description": (
+                    f"The investigated email '{email}' is hosted on '{domain}' - "
+                    f"the domain being scanned is the same one backing this email address."
+                ),
+            })
+
+    # --- username appears as an exact subdomain label ---
+    if username and domain:
+        subdomain_info = domain_results.get("subdomains", {})
+        if isinstance(subdomain_info, dict) and subdomain_info.get("success"):
+            username_lower = username.lower()
+            domain_lower = domain.lower()
+            matched_subs = []
+            for sub in subdomain_info.get("subdomains", []):
+                if sub == domain_lower:
+                    continue  # the apex domain itself, not a subdomain label
+                label = sub[:-(len(domain_lower) + 1)] if sub.endswith("." + domain_lower) else sub
+                leftmost_label = label.split(".")[0]
+                if leftmost_label == username_lower:
+                    matched_subs.append(sub)
+            if matched_subs:
+                findings.append({
+                    "type": "username_in_subdomains",
+                    "confidence": "High",
+                    "description": (
+                        f"Subdomain(s) {', '.join(matched_subs)} match the username "
+                        f"'{username}' exactly - likely a personal or user-specific subdomain."
+                    ),
+                })
+
+    # --- WHOIS registrant email matches the investigated email directly ---
+    registrant_emails = domain_results.get("registrant_emails") or []
+    if email and any(email.lower() == e.lower() for e in registrant_emails):
+        findings.append({
+            "type": "whois_registrant_email_matches_target_email",
+            "confidence": "High",
+            "description": (
+                f"WHOIS registrant contact for '{domain}' lists the email '{email}' "
+                f"directly - this domain is very likely registered by the same person "
+                f"under investigation."
+            ),
+        })
+
+    # --- WHOIS registrant name/org contains the username ---
+    # Weaker than the exact-match rules above (registrant name/org are free
+    # text, so a substring hit isn't as ironclad as an exact email or
+    # subdomain match) - rated Medium rather than High for that reason.
+    if username:
+        username_lower = username.lower()
+        for label, value in (
+            ("name", domain_results.get("registrant_name")),
+            ("organization", domain_results.get("registrant_org")),
+        ):
+            if value and username_lower in value.lower():
+                findings.append({
+                    "type": "whois_registrant_matches_username",
+                    "confidence": "Medium",
+                    "description": (
+                        f"WHOIS registrant {label} for '{domain}' ('{value}') contains "
+                        f"the username '{username}' - possible link, but registrant "
+                        f"fields are free text so this is weaker evidence than an exact "
+                        f"email or subdomain match."
+                    ),
+                })
+
+    return findings
+
+
 # --- exposure risk scoring --------------------------------------------------
 # Data-driven on purpose: tuning the score later means editing this dict,
 # not hunting through if/elif branches. Each rule has a point value, a
@@ -773,6 +901,474 @@ def calculate_risk(report):
     }
 
 
+# --- HTML report generation -------------------------------------------------
+# Turns the same `report` dict everything else already populates into a
+# single self-contained HTML file - inline CSS only, no external requests,
+# no JS framework, so it opens and reads correctly offline with nothing but
+# a browser. Deliberately built last: every other check feeds it, so this is
+# the piece that actually turns raw recon output into something that reads
+# like an assessment.
+#
+# Every value that originated from an external source (WHOIS text,
+# subdomains, breach titles, redirect targets) goes through html.escape()
+# before being embedded - none of that text is under our control, and this
+# is a security tool, so treating it as untrusted by default is the right
+# default even though it's just rendered to a local file.
+#
+# Colors are CSS variable references, not raw hex, so a single severity/
+# confidence value renders correctly in both light and dark mode without
+# the Python side needing to know which theme is active.
+_SEVERITY_COLORS = {
+    "Low": "var(--sev-low)", "Medium": "var(--sev-medium)",
+    "High": "var(--sev-high)", "Critical": "var(--sev-critical)",
+}
+_CONFIDENCE_COLORS = {
+    "High": "var(--conf-high)", "Medium": "var(--conf-medium)", "Low": "var(--conf-low)",
+}
+_SECTION_LABELS = {
+    "risk": "Assessment", "correlations": "Correlations", "username": "Username",
+    "domain": "Domain", "email": "Email", "exif": "Image", "dorks": "Dorks",
+}
+
+_REPORT_CSS = """
+:root {
+  --bg: #f2f4f1; --panel: #fbfcfa; --hairline: #d7dcd3; --fg: #16211f; --muted: #5c6960;
+  --accent: #0f6e5c; --ok: #2f9e44; --bad: #b42318;
+  --sev-low: #2f9e44; --sev-medium: #b8860b; --sev-high: #c2610c; --sev-critical: #b42318;
+  --conf-high: #0f6e5c; --conf-medium: #b8860b; --conf-low: #5c6960;
+  --mono: ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+  --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #101513; --panel: #171d1b; --hairline: #2a332f; --fg: #e7ece9; --muted: #93a39b;
+    --accent: #35b897; --ok: #51cf66; --bad: #ff6b6b;
+    --sev-low: #51cf66; --sev-medium: #e0b341; --sev-high: #ff922b; --sev-critical: #ff6b6b;
+    --conf-high: #35b897; --conf-medium: #e0b341; --conf-low: #93a39b;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #101513; --panel: #171d1b; --hairline: #2a332f; --fg: #e7ece9; --muted: #93a39b;
+  --accent: #35b897; --ok: #51cf66; --bad: #ff6b6b;
+  --sev-low: #51cf66; --sev-medium: #e0b341; --sev-high: #ff922b; --sev-critical: #ff6b6b;
+  --conf-high: #35b897; --conf-medium: #e0b341; --conf-low: #93a39b;
+}
+:root[data-theme="light"] {
+  --bg: #f2f4f1; --panel: #fbfcfa; --hairline: #d7dcd3; --fg: #16211f; --muted: #5c6960;
+  --accent: #0f6e5c; --ok: #2f9e44; --bad: #b42318;
+  --sev-low: #2f9e44; --sev-medium: #b8860b; --sev-high: #c2610c; --sev-critical: #b42318;
+  --conf-high: #0f6e5c; --conf-medium: #b8860b; --conf-low: #5c6960;
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--fg); line-height: 1.55; font-family: var(--sans); font-size: 15px; }
+a { color: var(--accent); }
+a:focus-visible, summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.report {
+  max-width: 1080px; margin: 0 auto; padding: 2.5rem 1.5rem 5rem;
+  display: grid; grid-template-columns: 250px 1fr; gap: 2.25rem; align-items: start;
+}
+.sidebar {
+  position: sticky; top: 2rem; background: var(--panel); border: 1px solid var(--hairline);
+  border-radius: 8px; padding: 1.5rem;
+}
+.wordmark { font-family: var(--mono); font-weight: 700; font-size: 1rem; letter-spacing: 0.01em; }
+.wordmark .sub {
+  display: block; font-weight: 500; color: var(--muted); font-size: 0.66rem;
+  letter-spacing: 0.14em; text-transform: uppercase; margin-top: 0.25rem;
+}
+.identity { margin: 1.25rem 0; display: flex; flex-direction: column; gap: 0.5rem; }
+.identity-row { display: flex; justify-content: space-between; gap: 0.75rem; }
+.identity-row .k {
+  font-family: var(--mono); color: var(--muted); text-transform: uppercase;
+  font-size: 0.64rem; letter-spacing: 0.07em; padding-top: 0.2rem; white-space: nowrap;
+}
+.identity-row .v { text-align: right; font-weight: 600; font-size: 0.85rem; word-break: break-word; }
+.gauge-block { border-top: 1px solid var(--hairline); padding-top: 1.25rem; margin-top: 0.25rem; }
+.gauge { position: relative; width: 92px; height: 92px; margin: 0 auto; }
+.gauge svg { width: 100%; height: 100%; }
+.gauge-track { stroke: var(--hairline); stroke-width: 2.5; fill: none; }
+.gauge-fill { stroke-width: 2.5; stroke-linecap: round; fill: none; }
+.gauge-value { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; }
+.gauge-value .num { font-family: var(--mono); font-weight: 700; font-size: 1.3rem; font-variant-numeric: tabular-nums; }
+.gauge-value .max { font-size: 0.6rem; color: var(--muted); margin-top: -0.15rem; }
+.gauge-caption { text-align: center; margin-top: 0.6rem; }
+.severity-pill {
+  display: inline-block; color: #fff; font-family: var(--mono); font-weight: 600;
+  font-size: 0.68rem; letter-spacing: 0.05em; text-transform: uppercase;
+  padding: 0.2rem 0.6rem; border-radius: 3px;
+}
+.no-score { color: var(--muted); font-size: 0.85rem; text-align: center; padding: 1rem 0; margin: 0; }
+.toc { display: flex; flex-direction: column; gap: 0.15rem; margin-top: 1.25rem; padding-top: 1.25rem; border-top: 1px solid var(--hairline); }
+.toc-label { font-family: var(--mono); font-size: 0.64rem; text-transform: uppercase; letter-spacing: 0.08em; color: var(--muted); margin-bottom: 0.4rem; }
+.toc a { color: var(--fg); text-decoration: none; font-size: 0.85rem; padding: 0.25rem 0 0.25rem 0.6rem; border-left: 2px solid transparent; margin-left: -0.6rem; }
+.toc a:hover, .toc a:focus-visible { border-left-color: var(--accent); color: var(--accent); }
+.meta { font-size: 0.72rem; color: var(--muted); margin-top: 1.25rem; }
+.main { display: flex; flex-direction: column; gap: 1.5rem; min-width: 0; }
+.panel { background: var(--panel); border: 1px solid var(--hairline); border-radius: 8px; padding: 1.5rem 1.75rem; scroll-margin-top: 1.5rem; }
+.panel h2 {
+  margin: 0 0 1.1rem; font-family: var(--mono); font-size: 0.72rem; font-weight: 600;
+  text-transform: uppercase; letter-spacing: 0.09em; color: var(--muted);
+  display: flex; align-items: center; gap: 0.55rem;
+}
+.panel h2::before { content: ""; width: 0.42rem; height: 0.42rem; border-radius: 50%; flex-shrink: 0; background: var(--dot, var(--hairline)); }
+.panel h3 { font-size: 0.68rem; color: var(--muted); text-transform: uppercase; letter-spacing: 0.07em; margin: 1.25rem 0 0.6rem; font-weight: 600; }
+.panel h3:first-of-type { margin-top: 0; }
+.muted { color: var(--muted); }
+.small { font-size: 0.83rem; }
+.ok { color: var(--ok); }
+.bad { color: var(--bad); }
+.table-wrap { overflow-x: auto; }
+table { border-collapse: collapse; width: 100%; font-size: 0.88rem; }
+table.kv td, table.rules td { padding: 0.5rem 0.6rem; border-bottom: 1px solid var(--hairline); vertical-align: top; text-align: left; }
+table.kv tr:last-child td, table.rules tr:last-child td { border-bottom: none; }
+table.kv td:first-child { color: var(--muted); width: 32%; white-space: nowrap; font-size: 0.82rem; }
+table.rules td.pts { font-family: var(--mono); font-weight: 700; width: 3.25rem; font-variant-numeric: tabular-nums; }
+ul { padding-left: 1.1rem; margin: 0.5rem 0; }
+ul.platform-list, ul.subdomain-list, ul.dorks, ul.breaches, ul.findings, ul.headers { list-style: none; padding-left: 0; margin: 0; }
+ul.platform-list li, ul.subdomain-list li { padding: 0.4rem 0; border-bottom: 1px solid var(--hairline); font-size: 0.88rem; }
+ul.platform-list li:last-child, ul.subdomain-list li:last-child { border-bottom: none; }
+ul.platform-list a { color: var(--fg); text-decoration: none; font-weight: 600; }
+ul.platform-list a:hover, ul.platform-list a:focus-visible { color: var(--accent); text-decoration: underline; }
+li.finding { display: flex; gap: 0.65rem; align-items: flex-start; padding: 0.5rem 0; border-bottom: 1px solid var(--hairline); font-size: 0.88rem; }
+li.finding:last-child { border-bottom: none; }
+.badge {
+  display: inline-block; color: #fff; font-family: var(--mono); font-size: 0.66rem; font-weight: 700;
+  letter-spacing: 0.03em; text-transform: uppercase; padding: 0.2rem 0.5rem; border-radius: 3px;
+  white-space: nowrap; margin-top: 0.1rem;
+}
+ul.headers li { padding: 0.2rem 0; font-size: 0.88rem; }
+details summary { cursor: pointer; color: var(--muted); font-size: 0.82rem; margin-top: 0.75rem; font-family: var(--mono); text-transform: uppercase; letter-spacing: 0.04em; }
+details[open] summary { margin-bottom: 0.5rem; }
+li.breach { border-bottom: 1px solid var(--hairline); padding: 0.6rem 0; font-size: 0.88rem; }
+li.breach:last-child { border-bottom: none; }
+@media (max-width: 860px) {
+  .report { grid-template-columns: 1fr; }
+  .sidebar { position: static; }
+}
+@media print {
+  body { background: #fff; color: #000; }
+  .report { grid-template-columns: 200px 1fr; }
+  .sidebar { position: static; break-inside: avoid; }
+  .toc { display: none; }
+  .panel { break-inside: avoid; }
+}
+"""
+
+
+def _panel(section_id, title, body_html, dot_color=None):
+    dot_style = f' style="--dot:{dot_color}"' if dot_color else ""
+    return f'<section class="panel" id="{section_id}"><h2{dot_style}>{html.escape(title)}</h2>{body_html}</section>'
+
+
+def _html_sidebar(report, nav_html):
+    target = report.get("target", {})
+    rows = "".join(
+        f'<div class="identity-row"><span class="k">{label}</span><span class="v">{html.escape(str(value))}</span></div>'
+        for label, key in (("username", "username"), ("domain", "domain"), ("email", "email"), ("image", "image"))
+        for value in [target.get(key)] if value
+    )
+
+    risk = report.get("risk_score")
+    if risk:
+        score = risk.get("score", 0)
+        max_score = risk.get("max_score", 100)
+        severity = risk.get("severity", "Low")
+        color = _SEVERITY_COLORS.get(severity, "var(--conf-low)")
+        pct = max(0, min(100, int(100 * score / max_score) if max_score else 0))
+        gauge_html = f"""
+        <div class="gauge-block">
+          <div class="gauge">
+            <svg viewBox="0 0 36 36">
+              <circle class="gauge-track" cx="18" cy="18" r="15.9155" />
+              <circle class="gauge-fill" cx="18" cy="18" r="15.9155"
+                      stroke-dasharray="{pct} {100 - pct}" transform="rotate(-90 18 18)"
+                      style="stroke:{color}" />
+            </svg>
+            <div class="gauge-value"><span class="num">{score}</span><span class="max">/ {max_score}</span></div>
+          </div>
+          <div class="gauge-caption"><span class="severity-pill" style="background:{color}">{html.escape(severity)}</span></div>
+        </div>
+        """
+    else:
+        gauge_html = '<div class="gauge-block"><p class="no-score">Not scored</p></div>'
+
+    generated_at = html.escape(str(report.get("generated_at", "")))
+    return f"""
+    <aside class="sidebar">
+      <div class="wordmark">OSINT FOOTPRINT<span class="sub">Analyzer &middot; Report</span></div>
+      <div class="identity">{rows}</div>
+      {gauge_html}
+      <nav class="toc">
+        <span class="toc-label">Contents</span>
+        {nav_html}
+      </nav>
+      <div class="meta">Generated {generated_at}</div>
+    </aside>
+    """
+
+
+def _html_risk_section(risk):
+    if not risk:
+        return ""
+    severity = risk.get("severity", "Low")
+    color = _SEVERITY_COLORS.get(severity, "var(--conf-low)")
+    triggered = risk.get("triggered_rules", [])
+    if triggered:
+        rows = "".join(
+            f'<tr><td class="pts">+{html.escape(str(t["points"]))}</td>'
+            f'<td>{html.escape(t["description"])}'
+            f'<div class="muted small">{html.escape(t["recommendation"])}</div></td></tr>'
+            for t in triggered
+        )
+        body = f'<div class="table-wrap"><table class="rules">{rows}</table></div>'
+    else:
+        body = '<p class="muted">No risk factors triggered.</p>'
+    return _panel("risk", "Exposure Assessment", body, dot_color=color)
+
+
+def _html_correlations_section(correlations):
+    if correlations is None:
+        return ""
+    if not correlations:
+        body = '<p class="muted">No direct correlations found between the supplied identifiers.</p>'
+        return _panel("correlations", "Identifier Correlations", body)
+    items = "".join(
+        f'<li class="finding"><span class="badge" '
+        f'style="background:{_CONFIDENCE_COLORS.get(c["confidence"], "var(--conf-low)")}">'
+        f'{html.escape(c["confidence"])}</span><span>{html.escape(c["description"])}</span></li>'
+        for c in correlations
+    )
+    body = f'<ul class="findings">{items}</ul>'
+    return _panel("correlations", "Identifier Correlations", body, dot_color="var(--accent)")
+
+
+def _html_username_section(results):
+    if not results:
+        return ""
+
+    def render_group(entries):
+        if not entries:
+            return '<p class="muted small">None</p>'
+        items = []
+        for e in entries:
+            platform = html.escape(e.get("platform", ""))
+            url = html.escape(e.get("url", ""))
+            notes = []
+            if e.get("reason"):
+                notes.append(html.escape(e["reason"]))
+            if e.get("redirected_to"):
+                notes.append(f'redirected to {html.escape(e["redirected_to"])}')
+            notes_html = f'<div class="muted small">{" &middot; ".join(notes)}</div>' if notes else ""
+            items.append(f'<li><a href="{url}" target="_blank" rel="noopener">{platform}</a>{notes_html}</li>')
+        return f'<ul class="platform-list">{"".join(items)}</ul>'
+
+    found = results.get("found", [])
+    unclear = results.get("unclear", [])
+    not_found = results.get("not_found", [])
+    errors = results.get("error", [])
+    errors_html = f'<details><summary>Errors ({len(errors)})</summary>{render_group(errors)}</details>' if errors else ""
+
+    body = f"""
+      <h3>Found ({len(found)})</h3>
+      {render_group(found)}
+      <details>
+        <summary>Unclear ({len(unclear)})</summary>
+        {render_group(unclear)}
+      </details>
+      <details>
+        <summary>Not found ({len(not_found)})</summary>
+        {render_group(not_found)}
+      </details>
+      {errors_html}
+    """
+    return _panel("username", "Username Footprint", body)
+
+
+def _html_domain_section(results):
+    if not results:
+        return ""
+
+    dns_records = results.get("dns_records", {})
+    dns_note = ""
+    if dns_records.get("skipped"):
+        dns_note = f'<p class="muted small">{html.escape(str(dns_records.get("reason", "")))}</p>'
+    elif dns_records.get("nxdomain"):
+        dns_note = '<p class="bad small">Domain does not exist (NXDOMAIN)</p>'
+
+    def _dns_value_cell(values):
+        return html.escape(", ".join(values)) if values else '<span class="muted">none</span>'
+
+    dns_rows = "".join(
+        f'<tr><td>{html.escape(rtype)}</td><td>{_dns_value_cell(values)}</td></tr>'
+        for rtype, values in dns_records.items()
+        if rtype not in ("nxdomain", "skipped", "reason")
+    )
+
+    whois_note = ""
+    if results.get("whois"):
+        whois_note = f'<p class="muted small">{html.escape(str(results["whois"]))}</p>'
+    elif results.get("whois_error"):
+        whois_note = f'<p class="muted small">WHOIS lookup failed: {html.escape(str(results["whois_error"]))}</p>'
+
+    whois_rows = ""
+    for label, key in (
+        ("Registrar", "registrar"), ("Created", "creation_date"), ("Expires", "expiration_date"),
+        ("Registrant name", "registrant_name"), ("Registrant org", "registrant_org"),
+    ):
+        value = results.get(key)
+        if value:
+            whois_rows += f"<tr><td>{label}</td><td>{html.escape(str(value))}</td></tr>"
+    registrant_emails = results.get("registrant_emails") or []
+    if registrant_emails:
+        whois_rows += f'<tr><td>Registrant email(s)</td><td>{html.escape(", ".join(registrant_emails))}</td></tr>'
+    whois_html = f'<div class="table-wrap"><table class="kv">{whois_rows}</table></div>' if whois_rows else whois_note
+
+    present = results.get("security_headers_present", {})
+    missing = results.get("security_headers_missing", [])
+    headers_items = "".join(f'<li class="ok">&check; {html.escape(h)}</li>' for h in present)
+    headers_items += "".join(f'<li class="bad">&cross; {html.escape(h)}</li>' for h in missing)
+    headers_html = f'<ul class="headers">{headers_items}</ul>' if headers_items else ""
+
+    subdomain_info = results.get("subdomains", {})
+    sub_html = ""
+    if isinstance(subdomain_info, dict) and subdomain_info.get("success"):
+        sub_list = subdomain_info.get("subdomains", [])
+        items = "".join(f"<li>{html.escape(s)}</li>" for s in sub_list)
+        sub_html = (
+            f'<details><summary>Subdomains ({len(sub_list)})</summary>'
+            f'<ul class="subdomain-list">{items}</ul></details>'
+        )
+    elif isinstance(subdomain_info, dict) and subdomain_info.get("reason"):
+        sub_html = f'<p class="muted small">Subdomain lookup unavailable: {html.escape(subdomain_info["reason"])}</p>'
+
+    body = f"""
+      <h3>DNS Records</h3>
+      {dns_note}
+      <div class="table-wrap"><table class="kv">{dns_rows}</table></div>
+      <h3>WHOIS</h3>
+      {whois_html}
+      <h3>Security Headers</h3>
+      {headers_html}
+      {sub_html}
+    """
+    return _panel("domain", "Domain Recon", body)
+
+
+def _html_email_section(results):
+    if not results:
+        return ""
+    email_raw = results.get("email", "")
+    valid = results.get("format_valid")
+    mx = results.get("mx_records", [])
+    hibp = results.get("hibp", {})
+    dot = None
+
+    if hibp.get("checked"):
+        breaches = hibp.get("breaches", [])
+        if breaches:
+            dot = "var(--sev-high)"
+            items = "".join(
+                f'<li class="breach"><strong>{html.escape(b.get("title", ""))}</strong> '
+                f'<span class="muted small">({html.escape(b.get("breach_date", ""))})</span>'
+                f'<div class="muted small">Exposed: {html.escape(", ".join(b.get("data_classes", [])))}</div></li>'
+                for b in breaches
+            )
+            hibp_html = f'<p class="bad">Breached in {len(breaches)} known breach(es):</p><ul class="breaches">{items}</ul>'
+        else:
+            hibp_html = '<p class="ok">No known breaches (HaveIBeenPwned)</p>'
+    else:
+        reason = hibp.get("reason") or "Not checked"
+        hibp_html = f'<p class="muted">Breach check skipped: {html.escape(reason)}</p>'
+
+    body = f"""
+      <p>Format valid: {"&check; yes" if valid else "&cross; no"}</p>
+      {f'<p>MX records: {html.escape(", ".join(mx))}</p>' if mx else ""}
+      {hibp_html}
+    """
+    return _panel("email", f"Email: {email_raw}", body, dot_color=dot)
+
+
+def _html_exif_section(results):
+    if not results:
+        return ""
+    if not results.get("has_exif"):
+        file_name = html.escape(str(results.get("file", "")))
+        body = f'<p class="muted">No EXIF data present in \'{file_name}\'.</p>'
+        return _panel("exif", "Image Metadata (EXIF)", body)
+
+    rows = ""
+    for label, key in (
+        ("Format", "format"), ("Dimensions", "dimensions"), ("Camera make", "camera_make"),
+        ("Camera model", "camera_model"), ("Created", "created"), ("Software", "software"),
+    ):
+        value = results.get(key)
+        if value:
+            rows += f"<tr><td>{label}</td><td>{html.escape(str(value))}</td></tr>"
+
+    gps = results.get("gps")
+    dot = None
+    gps_html = ""
+    if gps:
+        dot = "var(--sev-high)"
+        maps_url = html.escape(gps["maps_url"])
+        gps_html = (
+            f'<p class="bad">GPS location found: {gps["latitude"]}, {gps["longitude"]} - '
+            f'<a href="{maps_url}" target="_blank" rel="noopener">view on map</a></p>'
+        )
+
+    body = f'<div class="table-wrap"><table class="kv">{rows}</table></div>{gps_html}'
+    return _panel("exif", "Image Metadata (EXIF)", body, dot_color=dot)
+
+
+def _html_dorks_section(dorks):
+    if not dorks:
+        return ""
+    items = "".join(
+        f'<li><a href="https://www.google.com/search?q={url_quote(d)}" target="_blank" rel="noopener">'
+        f'{html.escape(d)}</a></li>'
+        for d in dorks
+    )
+    body = f'<ul class="dorks">{items}</ul>'
+    return _panel("dorks", "Suggested Manual Dorks", body)
+
+
+def generate_html_report(report):
+    section_defs = [
+        ("risk", _html_risk_section(report.get("risk_score"))),
+        ("correlations", _html_correlations_section(report.get("correlations"))),
+        ("username", _html_username_section(report.get("username_results"))),
+        ("domain", _html_domain_section(report.get("domain_results"))),
+        ("email", _html_email_section(report.get("email_results"))),
+        ("exif", _html_exif_section(report.get("exif_results"))),
+        ("dorks", _html_dorks_section(report.get("suggested_dorks"))),
+    ]
+    present = [sid for sid, content in section_defs if content]
+    nav_html = "".join(f'<a href="#{sid}">{_SECTION_LABELS[sid]}</a>' for sid in present)
+    main_content = "\n".join(content for _, content in section_defs if content)
+    sidebar = _html_sidebar(report, nav_html)
+
+    return f"""<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>OSINT Footprint Report</title>
+<style>
+{_REPORT_CSS}
+</style>
+</head>
+<body>
+<div class="report">
+{sidebar}
+<main class="main">
+{main_content}
+</main>
+</div>
+</body>
+</html>
+"""
+
+
 def main():
     parser = argparse.ArgumentParser(description="OSINT Footprint Analyzer v0.1")
     parser.add_argument("--username", help="username to search across platforms")
@@ -783,6 +1379,7 @@ def main():
                                             "(or set the HIBP_API_KEY environment variable instead, "
                                             "so the key never ends up typed into shell history or a script)")
     parser.add_argument("--out", help="save results to JSON file", default=None)
+    parser.add_argument("--html", help="save a self-contained HTML report to this path", default=None)
     args = parser.parse_args()
 
     if not any([args.username, args.domain, args.email, args.image]):
@@ -815,6 +1412,18 @@ def main():
     if args.image:
         report["exif_results"] = extract_exif(args.image)
 
+    # correlation runs after all data collection, purely analyzing what's
+    # already in `report` - no new requests, so it naturally covers whichever
+    # combination of username/domain/email was actually supplied
+    correlations = correlate_findings(report)
+    report["correlations"] = correlations
+    if correlations:
+        print("\n[*] Identifier correlations found:")
+        for c in correlations:
+            print(f"    [{c['confidence']:6s}] {c['description']}")
+    else:
+        print("\n[*] No direct identifier correlations found.")
+
     dorks = generate_dorks(args.username, args.domain, args.email)
     if dorks:
         print("\n[*] Suggested manual Google dorks:")
@@ -838,8 +1447,18 @@ def main():
             json.dump(report, f, indent=2, default=str)
         print(f"\n[+] Results saved to {args.out}")
 
+    if args.html:
+        with open(args.html, "w") as f:
+            f.write(generate_html_report(report))
+        print(f"[+] HTML report saved to {args.html}")
+
     print("\n[*] Done.")
 
 
 if __name__ == "__main__":
+
+
+
+
+
     main()
