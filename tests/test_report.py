@@ -1,7 +1,7 @@
 import re
 
 from correlation import correlate_findings
-from report import generate_html_report
+from report import _collapsible_value, generate_html_report
 from risk import calculate_risk
 
 _BALANCED_TAGS = ["section", "div", "table", "ul", "details", "aside", "main", "svg"]
@@ -12,6 +12,74 @@ def _assert_tags_balance(html_text):
         opens = len(re.findall(rf"<{tag}\b", html_text))
         closes = len(re.findall(rf"</{tag}>", html_text))
         assert opens == closes, f"<{tag}> mismatch: {opens} opens vs {closes} closes"
+
+
+class TestCollapsibleValue:
+    def test_short_value_stays_inline_no_details(self):
+        html_out = _collapsible_value("max-age=31536000")
+        assert "<details" not in html_out
+        assert "max-age=31536000" in html_out
+
+    def test_long_value_collapses_behind_details(self):
+        long_value = "a" * 500
+        html_out = _collapsible_value(long_value)
+        assert '<details class="value-details">' in html_out
+        assert "…" in html_out  # truncated preview marker
+        assert long_value in html_out  # full value still present, just inside the details body
+
+    def test_long_value_preview_is_truncated_not_full_length(self):
+        long_value = "x" * 500
+        html_out = _collapsible_value(long_value)
+        summary = html_out.split("<summary")[1].split("</summary>")[0]
+        assert len(summary) < 500
+
+    def test_muted_false_omits_span_wrapper_for_short_values(self):
+        html_out = _collapsible_value("short", muted=False)
+        assert "<span" not in html_out
+
+
+def test_long_dns_txt_record_collapses_in_report():
+    long_txt = "v=spf1 " + " ".join(f"include:_spf{i}.example.com" for i in range(20)) + " ~all"
+    report = {
+        "target": {"domain": "example.com"},
+        "domain_results": {"dns_records": {"TXT": [long_txt]}},
+    }
+    html_out = generate_html_report(report)
+    assert '<details class="value-details">' in html_out
+    assert long_txt in html_out
+
+
+def test_short_dns_record_does_not_collapse():
+    report = {
+        "target": {"domain": "example.com"},
+        "domain_results": {"dns_records": {"A": ["192.0.2.10"]}},
+    }
+    html_out = generate_html_report(report)
+    # "value-details" also appears in the CSS as a class selector regardless
+    # of content, so check for the actual <details> tag, not the bare substring
+    assert '<details class="value-details">' not in html_out
+
+
+def test_long_security_header_value_collapses():
+    long_csp = "default-src none; " + "; ".join(f"connect-src example{i}.com" for i in range(20))
+    report = {
+        "target": {"domain": "example.com"},
+        "domain_results": {"security_headers_present": {"Content-Security-Policy": long_csp}},
+    }
+    html_out = generate_html_report(report)
+    assert '<details class="value-details">' in html_out
+    assert long_csp in html_out
+
+
+def test_long_spf_record_collapses():
+    long_spf = "v=spf1 " + " ".join(f"include:_spf{i}.example.com" for i in range(20)) + " ~all"
+    report = {
+        "target": {"domain": "example.com"},
+        "domain_results": {"email_security": {"spf": True, "spf_record": long_spf, "dmarc": False, "dmarc_record": None}},
+    }
+    html_out = generate_html_report(report)
+    assert '<details class="value-details">' in html_out
+    assert long_spf in html_out
 
 
 def test_empty_report_still_renders():

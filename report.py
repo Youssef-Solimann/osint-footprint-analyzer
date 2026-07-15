@@ -125,7 +125,7 @@ a:focus-visible, summary:focus-visible { outline: 2px solid var(--accent); outli
 table { border-collapse: collapse; width: 100%; font-size: 0.88rem; }
 table.kv td, table.rules td { padding: 0.5rem 0.6rem; border-bottom: 1px solid var(--hairline); vertical-align: top; text-align: left; }
 table.kv tr:last-child td, table.rules tr:last-child td { border-bottom: none; }
-table.kv tr:nth-child(even) td, table.rules tr:nth-child(even) td { background: rgba(127, 127, 127, 0.06); }
+table.kv tr:nth-child(even) td, table.rules tr:nth-child(even) td { background: rgba(127, 127, 127, 0.14); }
 table.kv td:first-child { color: var(--muted); width: 32%; white-space: nowrap; font-size: 0.82rem; }
 table.rules td.pts { font-family: var(--mono); font-weight: 700; width: 3.25rem; font-variant-numeric: tabular-nums; }
 ul { padding-left: 1.1rem; margin: 0.5rem 0; }
@@ -153,6 +153,16 @@ pre.raw-text {
 ul.headers li { padding: 0.2rem 0; font-size: 0.88rem; }
 details summary { cursor: pointer; color: var(--muted); font-size: 0.82rem; margin-top: 0.75rem; font-family: var(--mono); text-transform: uppercase; letter-spacing: 0.04em; }
 details[open] summary { margin-bottom: 0.5rem; }
+/* value-details holds a truncated preview of real content (a CSP header,
+   a TXT record dump) - the uppercase/mono treatment above is for short
+   section labels like "Subdomains (12)", wrong tone for a text preview */
+details.value-details { display: inline; }
+details.value-details summary {
+  display: inline; margin-top: 0; font-family: var(--sans); text-transform: none;
+  letter-spacing: normal; font-size: inherit; color: inherit;
+}
+details.value-details[open] summary { margin-bottom: 0.35rem; display: block; }
+details.value-details .raw-text { margin-top: 0.35rem; }
 li.breach { border-bottom: 1px solid var(--hairline); padding: 0.6rem 0; font-size: 0.88rem; }
 li.breach:last-child { border-bottom: none; }
 @media (max-width: 860px) {
@@ -172,6 +182,26 @@ li.breach:last-child { border-bottom: none; }
 def _panel(section_id, title, body_html, dot_color=None):
     dot_style = f' style="--dot:{dot_color}"' if dot_color else ""
     return f'<section class="panel" id="{section_id}"><h2{dot_style}>{html.escape(title)}</h2>{body_html}</section>'
+
+
+# values longer than this collapse behind a <details> disclosure instead of
+# dumping straight into the table - a full CSP header or a joined TXT record
+# list can run past 500 characters and otherwise dominates the whole panel
+_COLLAPSE_THRESHOLD = 100
+
+
+def _collapsible_value(value, muted=True):
+    text = str(value)
+    escaped = html.escape(text)
+    css = "muted small" if muted else ""
+    if len(text) <= _COLLAPSE_THRESHOLD:
+        return f'<span class="{css}">{escaped}</span>' if css else escaped
+    preview = html.escape(text[:_COLLAPSE_THRESHOLD].rstrip()) + "…"
+    summary_class = f' class="{css}"' if css else ""
+    return (
+        f'<details class="value-details"><summary{summary_class}>{preview}</summary>'
+        f'<div class="raw-text">{escaped}</div></details>'
+    )
 
 
 def _html_sidebar(report, nav_html):
@@ -310,7 +340,7 @@ def _html_domain_section(results):
         dns_note = '<p class="bad small">Domain does not exist (NXDOMAIN)</p>'
 
     def _dns_value_cell(values):
-        return html.escape(", ".join(values)) if values else '<span class="muted">none</span>'
+        return _collapsible_value(", ".join(values), muted=False) if values else '<span class="muted">none</span>'
 
     dns_rows = "".join(
         f'<tr><td>{html.escape(rtype)}</td><td>{_dns_value_cell(values)}</td></tr>'
@@ -343,7 +373,7 @@ def _html_domain_section(results):
     present = results.get("security_headers_present", {})
     missing = results.get("security_headers_missing", [])
     headers_items = "".join(
-        f'<li class="ok">&check; {html.escape(h)}: <span class="muted small">{html.escape(str(v))}</span></li>'
+        f'<li class="ok">&check; {html.escape(h)}: {_collapsible_value(v)}</li>'
         for h, v in present.items()
     )
     headers_items += "".join(f'<li class="bad">&cross; {html.escape(h)}</li>' for h in missing)
@@ -364,7 +394,7 @@ def _html_domain_section(results):
     def _email_sec_row(label, ok, record):
         css_class = "ok" if ok else "bad"
         mark = "&check;" if ok else "&cross;"
-        detail = f': <span class="muted small">{html.escape(record)}</span>' if ok and record else ""
+        detail = f': {_collapsible_value(record)}' if ok and record else ""
         return f'<li class="{css_class}">{mark} {label}{detail}</li>'
 
     email_sec = results.get("email_security") or {}
