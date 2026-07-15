@@ -52,6 +52,8 @@ class _DnsRec:
 
 
 def _fake_dns_resolve(domain, rtype):
+    if domain == f"_dmarc.{DOMAIN}" and rtype == "TXT":
+        return [_DnsRec('"v=DMARC1; p=reject"')]
     assert domain == DOMAIN  # both --domain and the email's domain are janedoe.dev
     if rtype == "A":
         return [_DnsRec("192.0.2.10")]
@@ -75,6 +77,10 @@ def _whois_stub():
     )
 
 
+ROBOTS_TXT_BODY = "User-agent: *\nDisallow: /admin\nDisallow: /internal\n"
+SECURITY_TXT_BODY = "Contact: mailto:security@janedoe.dev\nExpires: 2027-01-01T00:00:00Z\n"
+
+
 def _make_fake_get_with_retry(fake_response_cls):
     def fake_get_with_retry(url, max_retries=2, extra_headers=None):
         if "haveibeenpwned.com" in url:
@@ -83,8 +89,13 @@ def _make_fake_get_with_retry(fake_response_cls):
                 "BreachDate": "2020-01-01", "DataClasses": ["Emails", "Passwords"],
             }])
         if url == f"https://{DOMAIN}":
-            # no security headers present at all -> all 4 header rules fire
-            return fake_response_cls(status_code=200, headers={})
+            # no security headers present at all -> all 4 header rules fire.
+            # Server header doubles as the technology-fingerprint signal.
+            return fake_response_cls(status_code=200, headers={"Server": "cloudflare"})
+        if url == f"https://{DOMAIN}/robots.txt":
+            return fake_response_cls(status_code=200, text=ROBOTS_TXT_BODY)
+        if url == f"https://{DOMAIN}/.well-known/security.txt":
+            return fake_response_cls(status_code=200, text=SECURITY_TXT_BODY)
         # one of the 15 username platform-check URLs
         return fake_response_cls(status_code=200, text="")
     return fake_get_with_retry
@@ -156,6 +167,14 @@ def test_full_pipeline_end_to_end(tmp_path, monkeypatch, fake_response):
     assert domain_results["subdomains"]["success"] is True
     assert len(domain_results["subdomains"]["subdomains"]) == 12
 
+    # --- new OSINT checks: tech fingerprint, SPF/DMARC, robots/security.txt ---
+    assert domain_results["technologies"] == ["Cloudflare"]
+    assert domain_results["email_security"]["spf"] is False  # no SPF in the (empty) TXT records
+    assert domain_results["email_security"]["dmarc"] is True
+    assert domain_results["email_security"]["dmarc_record"] == "v=DMARC1; p=reject"
+    assert domain_results["robots_disallow"] == ["/admin", "/internal"]
+    assert domain_results["security_txt"] == SECURITY_TXT_BODY.strip()
+
     # --- email/HIBP ---
     assert report["email_results"]["hibp"]["checked"] is True
     assert len(report["email_results"]["hibp"]["breaches"]) == 1
@@ -197,6 +216,10 @@ def test_full_pipeline_end_to_end(tmp_path, monkeypatch, fake_response):
     assert "janedoe.janedoe.dev" in html_out
     assert "ns1.registrar.net" in html_out
     assert "JaneDoe Web Services" in html_out
+    assert "Cloudflare" in html_out
+    assert "v=DMARC1; p=reject" in html_out
+    assert "/admin" in html_out
+    assert "security@janedoe.dev" in html_out
 
     for tag in ("section", "div", "table", "ul", "details", "aside", "main", "svg"):
         opens = len(re.findall(rf"<{tag}\b", html_out))

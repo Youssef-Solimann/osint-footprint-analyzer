@@ -4,6 +4,37 @@ import requests
 
 import utils
 
+# name -> (header to inspect, substring to match in its value, or None if the
+# header's mere presence is the signal). Data-driven for the same reason
+# PLATFORMS is: adding a fingerprint means adding one entry, not a new
+# if-branch. Deliberately reuses whatever headers the security-headers
+# request already fetched rather than making another request.
+_TECH_SIGNALS = [
+    ("Cloudflare", "Server", "cloudflare"),
+    ("Cloudflare", "CF-RAY", None),
+    ("Nginx", "Server", "nginx"),
+    ("Apache", "Server", "apache"),
+    ("Microsoft IIS", "Server", "microsoft-iis"),
+    ("GitHub Pages", "Server", "github.com"),
+    ("Varnish", "Via", "varnish"),
+    ("Vercel", "Server", "vercel"),
+    ("AWS CloudFront", "Via", "cloudfront"),
+    ("Fastly", "Server", "fastly"),
+    ("Google Frontend", "Server", "gws"),
+]
+
+
+def _fingerprint_technologies(headers):
+    detected = set()
+    headers_lower = {k.lower(): v for k, v in headers.items()}
+    for tech, header_name, value_substr in _TECH_SIGNALS:
+        value = headers_lower.get(header_name.lower())
+        if value is None:
+            continue
+        if value_substr is None or value_substr.lower() in value.lower():
+            detected.add(tech)
+    return sorted(detected)
+
 
 def check_subdomains(domain):
     """
@@ -17,12 +48,19 @@ def check_subdomains(domain):
     look" (rate limited, service down, network error, bad response), same
     philosophy as the found/not_found/unclear/error split in
     check_username().
+
+    Also surfaces the most recently issued certificate's issuer and
+    validity window - crt.sh's response already includes this per entry,
+    so it's free once we're already parsing the response for subdomains.
     """
     print(f"\n[*] Searching Certificate Transparency logs for '{domain}' subdomains...")
     # status starts as None: we may fail before ever getting an HTTP response
     # at all (e.g. connection error), in which case there's no status code to
     # report - that's meaningfully different from "we got a bad status code".
-    result = {"success": False, "status": None, "source": "crt.sh", "reason": None, "subdomains": []}
+    result = {
+        "success": False, "status": None, "source": "crt.sh", "reason": None,
+        "subdomains": [], "latest_certificate": None,
+    }
     try:
         # crt.sh can be slow under load, give it more room than our normal TIMEOUT
         url = f"https://crt.sh/?q=%.{domain}&output=json"
@@ -47,7 +85,19 @@ def check_subdomains(domain):
 
         entries = r.json()
         subdomains = set()
+        latest_cert = None
         for entry in entries:
+            # crt.sh dates are ISO 8601 ("2024-05-01T00:00:00") - they sort
+            # correctly as plain strings, no need to parse into datetimes
+            # just to find the most recent one.
+            not_before = entry.get("not_before")
+            if not_before and (latest_cert is None or not_before > latest_cert["not_before"]):
+                latest_cert = {
+                    "issuer": entry.get("issuer_name"),
+                    "not_before": not_before,
+                    "not_after": entry.get("not_after"),
+                }
+
             # name_value can contain multiple names separated by newlines
             # (one cert can cover several subdomains via SAN)
             names = entry.get("name_value", "").split("\n")
@@ -61,7 +111,10 @@ def check_subdomains(domain):
         subdomains_list = sorted(subdomains)
         result["success"] = True
         result["subdomains"] = subdomains_list
+        result["latest_certificate"] = latest_cert
         print(f"    [+] Found {len(subdomains_list)} unique subdomains")
+        if latest_cert:
+            print(f"    [+] Latest certificate issued by {latest_cert['issuer']}, valid {latest_cert['not_before']} to {latest_cert['not_after']}")
         for s in subdomains_list[:20]:  # don't flood the console on huge results
             print(f"        {s}")
         if len(subdomains_list) > 20:
@@ -137,6 +190,74 @@ def check_dns_records(domain):
     return results
 
 
+def _check_email_security(domain, txt_records):
+    """
+    SPF lives in the domain's own TXT records (already fetched by
+    check_dns_records) - just look for the v=spf1 marker. DMARC lives at
+    a separate _dmarc.<domain> TXT record, so it needs one extra lookup.
+
+    DKIM is deliberately not checked here - it lives under a
+    selector-specific hostname (selector._domainkey.<domain>), and
+    there's no way to know a domain's selector without prior knowledge,
+    so any check here would just be guessing at common selector names
+    rather than reporting a real result.
+    """
+    spf_record = next(
+        (t.strip('"') for t in txt_records if t.strip('"').lower().startswith("v=spf1")),
+        None,
+    )
+    result = {"spf": spf_record is not None, "spf_record": spf_record, "dmarc": False, "dmarc_record": None}
+
+    try:
+        import dns.resolver
+        answers = dns.resolver.resolve(f"_dmarc.{domain}", "TXT")
+        for rec in answers:
+            txt = str(rec).strip('"')
+            if txt.lower().startswith("v=dmarc1"):
+                result["dmarc"] = True
+                result["dmarc_record"] = txt
+                break
+    except ImportError:
+        pass  # dnspython missing is already reported by check_dns_records
+    except Exception:
+        pass  # no DMARC record, or the lookup failed - either way, "not found"
+
+    return result
+
+
+def check_well_known(domain):
+    """
+    robots.txt and security.txt are both plain-text files a site is
+    expected to publish at a fixed, well-known path - reading them isn't
+    scanning anything, just requesting pages the site itself intended to
+    be public. robots.txt's Disallow entries are useful OSINT precisely
+    because a site is listing the paths it doesn't want crawled/indexed
+    (often /admin, /internal, /staging).
+    """
+    result = {"robots_disallow": [], "security_txt": None}
+
+    try:
+        r = utils.get_with_retry(f"https://{domain}/robots.txt")
+        if r.status_code == 200:
+            disallow = [
+                line.split(":", 1)[1].strip()
+                for line in r.text.splitlines()
+                if line.strip().lower().startswith("disallow:")
+            ]
+            result["robots_disallow"] = [d for d in disallow if d]
+    except requests.exceptions.RequestException:
+        pass
+
+    try:
+        r = utils.get_with_retry(f"https://{domain}/.well-known/security.txt")
+        if r.status_code == 200 and r.text.strip():
+            result["security_txt"] = r.text.strip()
+    except requests.exceptions.RequestException:
+        pass
+
+    return result
+
+
 def check_domain(domain):
     print(f"\n[*] Domain recon for '{domain}'...")
     result = {}
@@ -206,8 +327,34 @@ def check_domain(domain):
         print(f"    [+] Security headers present: {list(present.keys())}")
         if missing:
             print(f"    [-] Security headers missing: {missing}")
+
+        # r.history holds every hop before the final response - only
+        # present when a redirect actually happened (e.g. http -> https -> www)
+        if r.history:
+            result["redirect_chain"] = [h.url for h in r.history] + [r.url]
+            print(f"    [+] Redirect chain: {' -> '.join(result['redirect_chain'])}")
+
+        technologies = _fingerprint_technologies(r.headers)
+        if technologies:
+            result["technologies"] = technologies
+            print(f"    [+] Technologies detected: {', '.join(technologies)}")
     except requests.exceptions.RequestException as e:
         print(f"    [!] Could not fetch site headers: {e}")
+
+    # email security: SPF (from the TXT records already fetched) + DMARC
+    email_security = _check_email_security(domain, dns_records.get("TXT", []))
+    result["email_security"] = email_security
+    print(f"    [{'+' if email_security['spf'] else '-'}] SPF record {'found' if email_security['spf'] else 'not found'}")
+    print(f"    [{'+' if email_security['dmarc'] else '-'}] DMARC record {'found' if email_security['dmarc'] else 'not found'}")
+
+    # robots.txt / security.txt - both published at fixed, expected-public paths
+    well_known = check_well_known(domain)
+    result["robots_disallow"] = well_known["robots_disallow"]
+    result["security_txt"] = well_known["security_txt"]
+    if result["robots_disallow"]:
+        print(f"    [+] robots.txt Disallow entries: {len(result['robots_disallow'])}")
+    if result["security_txt"]:
+        print("    [+] security.txt found")
 
     # subdomain enumeration via Certificate Transparency logs
     result["subdomains"] = check_subdomains(domain)

@@ -75,6 +75,86 @@ def test_domain_name_servers_appear_in_report():
     assert "ns2.registrar.net" in html_out
 
 
+def test_redirect_chain_renders_when_present():
+    report = {
+        "target": {"domain": "example.com"},
+        "domain_results": {"redirect_chain": ["http://example.com", "https://example.com", "https://www.example.com"]},
+    }
+    html_out = generate_html_report(report)
+    assert "http://example.com" in html_out
+    assert "https://www.example.com" in html_out
+
+
+def test_no_redirect_chain_renders_nothing_extra():
+    report = {"target": {"domain": "example.com"}, "domain_results": {}}
+    html_out = generate_html_report(report)
+    assert "&rarr;" not in html_out
+
+
+def test_technologies_render_as_badges():
+    report = {
+        "target": {"domain": "example.com"},
+        "domain_results": {"technologies": ["Cloudflare", "Nginx"]},
+    }
+    html_out = generate_html_report(report)
+    assert 'class="badge tech"' in html_out
+    assert "Cloudflare" in html_out
+    assert "Nginx" in html_out
+    assert "Technologies Detected" in html_out
+
+
+def test_no_technologies_hides_the_section_heading():
+    report = {"target": {"domain": "example.com"}, "domain_results": {}}
+    html_out = generate_html_report(report)
+    assert "Technologies Detected" not in html_out
+
+
+def test_email_security_shows_spf_and_dmarc_status():
+    report = {
+        "target": {"domain": "example.com"},
+        "domain_results": {"email_security": {
+            "spf": True, "spf_record": "v=spf1 -all", "dmarc": False, "dmarc_record": None,
+        }},
+    }
+    html_out = generate_html_report(report)
+    assert "Email Security" in html_out
+    assert "v=spf1 -all" in html_out
+    # SPF passed (checkmark), DMARC failed (cross) - both markers should appear
+    assert "&check;" in html_out
+    assert "&cross;" in html_out
+
+
+def test_well_known_files_render_disallow_entries_and_security_txt():
+    report = {
+        "target": {"domain": "example.com"},
+        "domain_results": {
+            "robots_disallow": ["/admin", "/internal"],
+            "security_txt": "Contact: mailto:security@example.com",
+        },
+    }
+    html_out = generate_html_report(report)
+    assert "Well-Known Files" in html_out
+    assert "/admin" in html_out
+    assert "security@example.com" in html_out
+    assert 'class="raw-text"' in html_out
+
+
+def test_latest_certificate_renders_when_subdomains_succeeded():
+    report = {
+        "target": {"domain": "example.com"},
+        "domain_results": {
+            "subdomains": {
+                "success": True, "subdomains": ["www.example.com"],
+                "latest_certificate": {"issuer": "Let's Encrypt", "not_before": "2026-01-01", "not_after": "2026-04-01"},
+            },
+        },
+    }
+    html_out = generate_html_report(report)
+    assert "Let&#x27;s Encrypt" in html_out  # html.escape() encodes the apostrophe
+    assert "2026-01-01" in html_out
+    assert "2026-04-01" in html_out
+
+
 def test_security_header_values_appear_not_just_presence():
     report = {
         "target": {"domain": "example.com"},

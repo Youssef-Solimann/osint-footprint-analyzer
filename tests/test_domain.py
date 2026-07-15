@@ -144,6 +144,122 @@ def test_subdomains_filters_out_entries_for_a_different_domain(fake_response):
     assert result["subdomains"] == ["foo.example.com"]
 
 
+def test_subdomains_tracks_the_most_recently_issued_certificate(fake_response):
+    body = [
+        {"name_value": "old.example.com", "issuer_name": "Old CA", "not_before": "2022-01-01T00:00:00", "not_after": "2023-01-01T00:00:00"},
+        {"name_value": "new.example.com", "issuer_name": "New CA", "not_before": "2024-06-01T00:00:00", "not_after": "2025-06-01T00:00:00"},
+    ]
+    with patch("requests.get", return_value=fake_response(status_code=200, json_data=body)):
+        result = mod.check_subdomains("example.com")
+    assert result["latest_certificate"] == {
+        "issuer": "New CA", "not_before": "2024-06-01T00:00:00", "not_after": "2025-06-01T00:00:00",
+    }
+
+
+def test_subdomains_no_certificate_dates_leaves_latest_certificate_none(fake_response):
+    body = [{"name_value": "foo.example.com"}]
+    with patch("requests.get", return_value=fake_response(status_code=200, json_data=body)):
+        result = mod.check_subdomains("example.com")
+    assert result["latest_certificate"] is None
+
+
+# --- technology fingerprinting -------------------------------------------
+
+class TestFingerprintTechnologies:
+    def test_detects_cloudflare_via_server_header(self):
+        assert mod._fingerprint_technologies({"Server": "cloudflare"}) == ["Cloudflare"]
+
+    def test_detects_cloudflare_via_cf_ray_presence(self):
+        assert mod._fingerprint_technologies({"CF-RAY": "abc123"}) == ["Cloudflare"]
+
+    def test_detects_nginx(self):
+        assert mod._fingerprint_technologies({"Server": "nginx/1.25.0"}) == ["Nginx"]
+
+    def test_detects_multiple_technologies(self):
+        result = mod._fingerprint_technologies({"Server": "cloudflare", "Via": "1.1 varnish"})
+        assert set(result) == {"Cloudflare", "Varnish"}
+
+    def test_header_lookup_is_case_insensitive(self):
+        assert mod._fingerprint_technologies({"server": "Apache/2.4"}) == ["Apache"]
+
+    def test_no_matching_headers_returns_empty_list(self):
+        assert mod._fingerprint_technologies({"Content-Type": "text/html"}) == []
+
+
+# --- SPF / DMARC -----------------------------------------------------------
+
+class TestCheckEmailSecurity:
+    def test_spf_found_in_txt_records(self):
+        with patch("dns.resolver.resolve", side_effect=dns.resolver.NXDOMAIN()):
+            result = mod._check_email_security("example.com", ['"v=spf1 include:_spf.example.com ~all"'])
+        assert result["spf"] is True
+        assert result["spf_record"] == "v=spf1 include:_spf.example.com ~all"
+
+    def test_no_spf_record_present(self):
+        with patch("dns.resolver.resolve", side_effect=dns.resolver.NXDOMAIN()):
+            result = mod._check_email_security("example.com", ["some other txt record"])
+        assert result["spf"] is False
+        assert result["spf_record"] is None
+
+    def test_dmarc_found_queries_the_dmarc_subdomain(self, fake_response):
+        with patch("dns.resolver.resolve", return_value=[_Rec('"v=DMARC1; p=reject"')]) as resolve_mock:
+            result = mod._check_email_security("example.com", [])
+        assert result["dmarc"] is True
+        assert result["dmarc_record"] == "v=DMARC1; p=reject"
+        resolve_mock.assert_called_once_with("_dmarc.example.com", "TXT")
+
+    def test_dmarc_not_found_when_lookup_fails(self):
+        with patch("dns.resolver.resolve", side_effect=dns.resolver.NXDOMAIN()):
+            result = mod._check_email_security("example.com", [])
+        assert result["dmarc"] is False
+        assert result["dmarc_record"] is None
+
+    def test_dmarc_txt_record_present_but_not_a_dmarc_record(self):
+        with patch("dns.resolver.resolve", return_value=[_Rec('"v=spf1 -all"')]):
+            result = mod._check_email_security("example.com", [])
+        assert result["dmarc"] is False
+
+
+# --- robots.txt / security.txt ----------------------------------------------
+
+class TestCheckWellKnown:
+    def test_robots_txt_disallow_entries_parsed(self, fake_response):
+        robots_body = "User-agent: *\nDisallow: /admin\nDisallow: /internal\nAllow: /\n"
+
+        def fake_get(url, max_retries=2, extra_headers=None):
+            if url.endswith("/robots.txt"):
+                return fake_response(status_code=200, text=robots_body)
+            return fake_response(status_code=404)
+
+        with patch("utils.get_with_retry", side_effect=fake_get):
+            result = mod.check_well_known("example.com")
+        assert result["robots_disallow"] == ["/admin", "/internal"]
+
+    def test_security_txt_captured_when_present(self, fake_response):
+        sec_txt_body = "Contact: mailto:security@example.com\nExpires: 2027-01-01T00:00:00Z\n"
+
+        def fake_get(url, max_retries=2, extra_headers=None):
+            if url.endswith("security.txt"):
+                return fake_response(status_code=200, text=sec_txt_body)
+            return fake_response(status_code=404)
+
+        with patch("utils.get_with_retry", side_effect=fake_get):
+            result = mod.check_well_known("example.com")
+        assert result["security_txt"] == sec_txt_body.strip()
+
+    def test_missing_well_known_files_do_not_crash(self, fake_response):
+        with patch("utils.get_with_retry", return_value=fake_response(status_code=404)):
+            result = mod.check_well_known("example.com")
+        assert result["robots_disallow"] == []
+        assert result["security_txt"] is None
+
+    def test_request_exception_does_not_crash(self):
+        with patch("utils.get_with_retry", side_effect=requests.exceptions.ConnectionError("refused")):
+            result = mod.check_well_known("example.com")
+        assert result["robots_disallow"] == []
+        assert result["security_txt"] is None
+
+
 # --- check_domain: WHOIS registrant extraction ---------------------------
 
 def _whois_stub(**overrides):
@@ -219,6 +335,59 @@ def test_check_domain_security_headers_split_present_and_missing(fake_response):
 
     assert result["security_headers_present"] == {"Strict-Transport-Security": "max-age=1"}
     assert "Content-Security-Policy" in result["security_headers_missing"]
+
+
+def test_check_domain_captures_redirect_chain(fake_response):
+    main_resp = fake_response(
+        status_code=200, headers={},
+        history=[fake_response(status_code=301, url="https://example.com")],
+        url="https://www.example.com",
+    )
+
+    def fake_get(url, *args, **kwargs):
+        return main_resp if url == "https://example.com" else fake_response(status_code=404)
+
+    with patch("dns.resolver.resolve", side_effect=dns.resolver.NoAnswer()), \
+            patch("whois.whois", return_value=_whois_stub()), \
+            patch("utils.get_with_retry", side_effect=fake_get), \
+            patch("domain.check_subdomains", return_value=_NO_SUBDOMAINS):
+        result = mod.check_domain("example.com")
+
+    assert result["redirect_chain"] == ["https://example.com", "https://www.example.com"]
+
+
+def test_check_domain_no_redirect_means_no_redirect_chain_key(fake_response):
+    with patch("dns.resolver.resolve", side_effect=dns.resolver.NoAnswer()), \
+            patch("whois.whois", return_value=_whois_stub()), \
+            patch("utils.get_with_retry", return_value=fake_response(status_code=200, headers={})), \
+            patch("domain.check_subdomains", return_value=_NO_SUBDOMAINS):
+        result = mod.check_domain("example.com")
+
+    assert "redirect_chain" not in result
+
+
+def test_check_domain_detects_technologies_from_headers(fake_response):
+    resp = fake_response(status_code=200, headers={"Server": "cloudflare"})
+    with patch("dns.resolver.resolve", side_effect=dns.resolver.NoAnswer()), \
+            patch("whois.whois", return_value=_whois_stub()), \
+            patch("utils.get_with_retry", return_value=resp), \
+            patch("domain.check_subdomains", return_value=_NO_SUBDOMAINS):
+        result = mod.check_domain("example.com")
+
+    assert result["technologies"] == ["Cloudflare"]
+
+
+def test_check_domain_includes_email_security_and_well_known(fake_response):
+    with patch("dns.resolver.resolve", side_effect=dns.resolver.NoAnswer()), \
+            patch("whois.whois", return_value=_whois_stub()), \
+            patch("utils.get_with_retry", return_value=fake_response(status_code=404)), \
+            patch("domain.check_subdomains", return_value=_NO_SUBDOMAINS):
+        result = mod.check_domain("example.com")
+
+    assert "email_security" in result
+    assert result["email_security"]["spf"] is False
+    assert result["robots_disallow"] == []
+    assert result["security_txt"] is None
 
 
 def test_check_domain_whois_generic_exception_is_captured_not_raised(fake_response):

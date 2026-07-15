@@ -125,6 +125,7 @@ a:focus-visible, summary:focus-visible { outline: 2px solid var(--accent); outli
 table { border-collapse: collapse; width: 100%; font-size: 0.88rem; }
 table.kv td, table.rules td { padding: 0.5rem 0.6rem; border-bottom: 1px solid var(--hairline); vertical-align: top; text-align: left; }
 table.kv tr:last-child td, table.rules tr:last-child td { border-bottom: none; }
+table.kv tr:nth-child(even) td, table.rules tr:nth-child(even) td { background: rgba(127, 127, 127, 0.06); }
 table.kv td:first-child { color: var(--muted); width: 32%; white-space: nowrap; font-size: 0.82rem; }
 table.rules td.pts { font-family: var(--mono); font-weight: 700; width: 3.25rem; font-variant-numeric: tabular-nums; }
 ul { padding-left: 1.1rem; margin: 0.5rem 0; }
@@ -139,6 +140,15 @@ li.finding:last-child { border-bottom: none; }
   display: inline-block; color: #fff; font-family: var(--mono); font-size: 0.66rem; font-weight: 700;
   letter-spacing: 0.03em; text-transform: uppercase; padding: 0.2rem 0.5rem; border-radius: 3px;
   white-space: nowrap; margin-top: 0.1rem;
+}
+.badge.tech {
+  background: transparent; border: 1px solid var(--hairline); color: var(--muted);
+  margin: 0 0.35rem 0.35rem 0; font-weight: 600;
+}
+pre.raw-text {
+  white-space: pre-wrap; word-break: break-word; font-family: var(--mono); font-size: 0.82rem;
+  background: var(--bg); border: 1px solid var(--hairline); border-radius: 6px; padding: 0.75rem;
+  margin: 0.5rem 0 0;
 }
 ul.headers li { padding: 0.2rem 0; font-size: 0.88rem; }
 details summary { cursor: pointer; color: var(--muted); font-size: 0.82rem; margin-top: 0.75rem; font-family: var(--mono); text-transform: uppercase; letter-spacing: 0.04em; }
@@ -339,6 +349,51 @@ def _html_domain_section(results):
     headers_items += "".join(f'<li class="bad">&cross; {html.escape(h)}</li>' for h in missing)
     headers_html = f'<ul class="headers">{headers_items}</ul>' if headers_items else ""
 
+    redirect_chain = results.get("redirect_chain") or []
+    redirect_html = (
+        f'<p class="small muted">{" &rarr; ".join(html.escape(u) for u in redirect_chain)}</p>'
+        if redirect_chain else ""
+    )
+
+    technologies = results.get("technologies") or []
+    tech_html = (
+        "".join(f'<span class="badge tech">{html.escape(t)}</span>' for t in technologies)
+        if technologies else ""
+    )
+
+    def _email_sec_row(label, ok, record):
+        css_class = "ok" if ok else "bad"
+        mark = "&check;" if ok else "&cross;"
+        detail = f': <span class="muted small">{html.escape(record)}</span>' if ok and record else ""
+        return f'<li class="{css_class}">{mark} {label}{detail}</li>'
+
+    email_sec = results.get("email_security") or {}
+    if email_sec:
+        email_sec_html = (
+            "<ul class=\"headers\">"
+            + _email_sec_row("SPF", email_sec.get("spf"), email_sec.get("spf_record"))
+            + _email_sec_row("DMARC", email_sec.get("dmarc"), email_sec.get("dmarc_record"))
+            + "</ul>"
+        )
+    else:
+        email_sec_html = ""
+
+    robots_disallow = results.get("robots_disallow") or []
+    well_known_parts = []
+    if robots_disallow:
+        items = "".join(f"<li>{html.escape(d)}</li>" for d in robots_disallow)
+        well_known_parts.append(
+            f'<details><summary>robots.txt Disallow entries ({len(robots_disallow)})</summary>'
+            f'<ul class="subdomain-list">{items}</ul></details>'
+        )
+    security_txt = results.get("security_txt")
+    if security_txt:
+        well_known_parts.append(
+            f'<details><summary>security.txt</summary>'
+            f'<pre class="raw-text">{html.escape(security_txt)}</pre></details>'
+        )
+    well_known_html = "".join(well_known_parts)
+
     subdomain_info = results.get("subdomains", {})
     sub_html = ""
     if isinstance(subdomain_info, dict) and subdomain_info.get("success"):
@@ -348,6 +403,14 @@ def _html_domain_section(results):
             f'<details><summary>Subdomains ({len(sub_list)})</summary>'
             f'<ul class="subdomain-list">{items}</ul></details>'
         )
+        cert = subdomain_info.get("latest_certificate")
+        if cert:
+            sub_html += (
+                f'<p class="small muted">Latest certificate issued by '
+                f'{html.escape(str(cert.get("issuer") or "unknown"))}, valid '
+                f'{html.escape(str(cert.get("not_before") or "?"))} to '
+                f'{html.escape(str(cert.get("not_after") or "?"))}</p>'
+            )
     elif isinstance(subdomain_info, dict) and subdomain_info.get("reason"):
         sub_html = f'<p class="muted small">Subdomain lookup unavailable: {html.escape(subdomain_info["reason"])}</p>'
 
@@ -359,6 +422,10 @@ def _html_domain_section(results):
       {whois_html}
       <h3>Security Headers</h3>
       {headers_html}
+      {redirect_html}
+      {f'<h3>Technologies Detected</h3><div>{tech_html}</div>' if tech_html else ""}
+      {f'<h3>Email Security</h3>{email_sec_html}' if email_sec_html else ""}
+      {f'<h3>Well-Known Files</h3>{well_known_html}' if well_known_html else ""}
       {sub_html}
     """
     return _panel("domain", "Domain Recon", body)
