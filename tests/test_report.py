@@ -65,6 +65,55 @@ def test_no_risk_score_shows_not_scored():
     assert "Not scored" in html_out
 
 
+def test_domain_name_servers_appear_in_report():
+    report = {
+        "target": {"domain": "example.com"},
+        "domain_results": {"name_servers": ["ns1.registrar.net", "ns2.registrar.net"]},
+    }
+    html_out = generate_html_report(report)
+    assert "ns1.registrar.net" in html_out
+    assert "ns2.registrar.net" in html_out
+
+
+def test_security_header_values_appear_not_just_presence():
+    report = {
+        "target": {"domain": "example.com"},
+        "domain_results": {"security_headers_present": {"Strict-Transport-Security": "max-age=63072000"}},
+    }
+    html_out = generate_html_report(report)
+    assert "Strict-Transport-Security" in html_out
+    assert "max-age=63072000" in html_out
+
+
+def test_exif_warnings_show_the_actual_reason_not_a_generic_message():
+    report = {
+        "target": {"image": "photo.jpg"},
+        "exif_results": {
+            "file": "photo.jpg", "has_exif": False, "format": None, "dimensions": None,
+            "camera_make": None, "camera_model": None, "created": None, "software": None,
+            "gps": None, "warnings": ["Could not open image: UnidentifiedImageError: cannot identify image file"],
+        },
+    }
+    html_out = generate_html_report(report)
+    assert "Could not open image: UnidentifiedImageError" in html_out
+
+
+def test_exif_warnings_still_show_alongside_successfully_parsed_data():
+    # a partial failure (e.g. GPS parsing blew up) shouldn't hide the fields
+    # that DID parse successfully, and shouldn't hide the warning either
+    report = {
+        "target": {"image": "photo.jpg"},
+        "exif_results": {
+            "file": "photo.jpg", "has_exif": True, "format": "JPEG", "dimensions": "10x10",
+            "camera_make": "TestMake", "camera_model": None, "created": None, "software": None,
+            "gps": None, "warnings": ["GPS parsing failed: ValueError"],
+        },
+    }
+    html_out = generate_html_report(report)
+    assert "TestMake" in html_out
+    assert "GPS parsing failed: ValueError" in html_out
+
+
 def test_full_report_renders_and_balances_tags():
     report = {
         "generated_at": "2026-01-01T00:00:00Z",

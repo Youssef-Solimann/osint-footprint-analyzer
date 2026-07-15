@@ -325,11 +325,17 @@ def _html_domain_section(results):
     registrant_emails = results.get("registrant_emails") or []
     if registrant_emails:
         whois_rows += f'<tr><td>Registrant email(s)</td><td>{html.escape(", ".join(registrant_emails))}</td></tr>'
+    name_servers = results.get("name_servers") or []
+    if name_servers:
+        whois_rows += f'<tr><td>Name servers</td><td>{html.escape(", ".join(str(n) for n in name_servers))}</td></tr>'
     whois_html = f'<div class="table-wrap"><table class="kv">{whois_rows}</table></div>' if whois_rows else whois_note
 
     present = results.get("security_headers_present", {})
     missing = results.get("security_headers_missing", [])
-    headers_items = "".join(f'<li class="ok">&check; {html.escape(h)}</li>' for h in present)
+    headers_items = "".join(
+        f'<li class="ok">&check; {html.escape(h)}: <span class="muted small">{html.escape(str(v))}</span></li>'
+        for h, v in present.items()
+    )
     headers_items += "".join(f'<li class="bad">&cross; {html.escape(h)}</li>' for h in missing)
     headers_html = f'<ul class="headers">{headers_items}</ul>' if headers_items else ""
 
@@ -395,9 +401,17 @@ def _html_email_section(results):
 def _html_exif_section(results):
     if not results:
         return ""
+
+    warnings = results.get("warnings") or []
+    warnings_html = ""
+    if warnings:
+        items = "".join(f"<li>{html.escape(w)}</li>" for w in warnings)
+        warnings_html = f'<h3>Notes</h3><ul class="muted small">{items}</ul>'
+
     if not results.get("has_exif"):
         file_name = html.escape(str(results.get("file", "")))
-        body = f'<p class="muted">No EXIF data present in \'{file_name}\'.</p>'
+        body = f'<p class="muted small">{file_name}</p>' if file_name else ""
+        body += warnings_html or '<p class="muted">No EXIF data present.</p>'
         return _panel("exif", "Image Metadata (EXIF)", body)
 
     rows = ""
@@ -420,7 +434,7 @@ def _html_exif_section(results):
             f'<a href="{maps_url}" target="_blank" rel="noopener">view on map</a></p>'
         )
 
-    body = f'<div class="table-wrap"><table class="kv">{rows}</table></div>{gps_html}'
+    body = f'<div class="table-wrap"><table class="kv">{rows}</table></div>{gps_html}{warnings_html}'
     return _panel("exif", "Image Metadata (EXIF)", body, dot_color=dot)
 
 
