@@ -101,6 +101,23 @@ def test_username_footprint_caps_at_max_points():
     assert calculate_risk(report)["score"] == rule["max_points"]
 
 
+def test_gps_in_photo_fires():
+    report = {"exif_results": {"has_exif": True, "gps": {"latitude": 1.0, "longitude": 2.0}}}
+    result = calculate_risk(report)
+    assert result["score"] == RISK_RULES["gps_in_photo"]["points"]
+    assert result["triggered_rules"][0]["rule"] == "gps_in_photo"
+
+
+def test_no_gps_in_photo_does_not_fire():
+    report = {"exif_results": {"has_exif": True, "gps": None}}
+    assert calculate_risk(report)["score"] == 0
+
+
+def test_no_exif_at_all_does_not_fire_gps_rule():
+    report = {"exif_results": {"has_exif": False, "gps": None}}
+    assert calculate_risk(report)["score"] == 0
+
+
 def test_combined_rules_sum_and_severity_matches_get_severity():
     report = {
         "email_results": {"hibp": {"checked": True, "breaches": [{"name": "a"}] * 5}},

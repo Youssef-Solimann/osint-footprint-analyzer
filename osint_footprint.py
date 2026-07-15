@@ -74,17 +74,22 @@ def main():
     if args.image:
         report_data["exif_results"] = exif_mod.extract_exif(args.image)
 
-    # correlation runs after all data collection, purely analyzing what's
-    # already in `report_data` - no new requests, so it naturally covers
-    # whichever combination of username/domain/email was actually supplied
-    correlations = correlation.correlate_findings(report_data)
-    report_data["correlations"] = correlations
-    if correlations:
-        print("\n[*] Identifier correlations found:")
-        for c in correlations:
-            print(f"    [{c['confidence']:6s}] {c['description']}")
-    else:
-        print("\n[*] No direct identifier correlations found.")
+    # correlation only ever compares username/domain/email against each
+    # other, so with fewer than two of those supplied it can't find
+    # anything by definition - skip it entirely (leaving "correlations"
+    # unset) rather than reporting a foregone "no correlations found"
+    # conclusion. report.generate_html_report() already treats a missing
+    # "correlations" key as "the engine never ran" and hides the section.
+    identifier_count = sum(1 for v in (args.username, args.domain, args.email) if v)
+    if identifier_count >= 2:
+        correlations = correlation.correlate_findings(report_data)
+        report_data["correlations"] = correlations
+        if correlations:
+            print("\n[*] Identifier correlations found:")
+            for c in correlations:
+                print(f"    [{c['confidence']:6s}] {c['description']}")
+        else:
+            print("\n[*] No direct identifier correlations found.")
 
     dorks = utils.generate_dorks(args.username, args.domain, args.email)
     if dorks:

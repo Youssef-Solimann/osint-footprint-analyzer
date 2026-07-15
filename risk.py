@@ -46,6 +46,11 @@ RISK_RULES = {
         "description": "Username confirmed on multiple platforms (2 pts each, capped at 10)",
         "recommendation": "Review privacy settings on these accounts; consider whether all need to be public.",
     },
+    "gps_in_photo": {
+        "points": 20,
+        "description": "Image contains embedded GPS coordinates (exact physical location)",
+        "recommendation": "Strip EXIF metadata before sharing photos publicly, or disable location tagging in your camera app's settings.",
+    },
 }
 
 # headers to rule-name mapping, used to walk security_headers_missing generically
@@ -102,6 +107,7 @@ def calculate_risk(report):
     username_results = report.get("username_results")
     domain_results = report.get("domain_results")
     email_results = report.get("email_results")
+    exif_results = report.get("exif_results")
 
     # --- email: confirmed breach ---
     if email_results:
@@ -131,6 +137,10 @@ def calculate_risk(report):
             rule = RISK_RULES["large_username_footprint"]
             points = min(found_count * rule["points"], rule["max_points"])
             fire("large_username_footprint", points=points)
+
+    # --- image: embedded GPS location ---
+    if exif_results and exif_results.get("gps"):
+        fire("gps_in_photo")
 
     total = min(total, 100)
     return {
