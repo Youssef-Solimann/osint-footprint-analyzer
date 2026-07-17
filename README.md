@@ -91,7 +91,9 @@ Any of `--username` / `--domain` / `--email` / `--image` can be omitted — ever
 
 [*] Exposure risk score: 18/100 (Low)
     +10  Domain does not enforce HTTPS (missing Strict-Transport-Security)
+         -> Enable Strict-Transport-Security to force HTTPS on all connections.
     +8   Domain has no Content-Security-Policy header (weaker XSS protection)
+         -> Add a Content-Security-Policy header to restrict what scripts/resources can load.
 
 [*] Suggested manual Google dorks:
     "johndoe" site:pastebin.com

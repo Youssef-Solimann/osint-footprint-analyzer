@@ -106,6 +106,7 @@ def main():
     if risk_result["triggered_rules"]:
         for t in risk_result["triggered_rules"]:
             print(f"    +{t['points']:<3} {t['description']}")
+            print(f"         -> {t['recommendation']}")
     else:
         print("    No risk factors triggered.")
 
