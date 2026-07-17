@@ -84,6 +84,15 @@ PLATFORMS = {
     "Keybase":     {"url": "https://keybase.io/{u}",                    "reliable": True, "not_found_text": None},
     "Dev.to":      {"url": "https://dev.to/{u}",                        "reliable": True, "not_found_text": None},
     "Docker Hub":  {"url": "https://hub.docker.com/u/{u}",              "reliable": True, "not_found_text": None},
+    # Telegram: verified empirically. t.me/{u} returns HTTP 200 for both
+    # real and nonexistent usernames (no 404), but a nonexistent one always
+    # carries <meta name="robots" content="noindex, nofollow"> - confirmed
+    # absent on two known-real profiles (durov, telegram) and present on
+    # two different nonexistent usernames. A username outside Telegram's
+    # own format rules (e.g. way over the 32-char limit) instead 302s to
+    # telegram.org - an edge case in the input, not a false result, so not
+    # specially handled here.
+    "Telegram":    {"url": "https://t.me/{u}",                          "reliable": True, "not_found_text": '<meta name="robots" content="noindex, nofollow">'},
     "Twitter/X":   {"url": "https://x.com/{u}",                         "reliable": False, "not_found_text": None},
     "Instagram":   {"url": "https://www.instagram.com/{u}/",            "reliable": False, "not_found_text": None},
     "TikTok":      {"url": "https://www.tiktok.com/@{u}",               "reliable": False, "not_found_text": None},

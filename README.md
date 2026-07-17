@@ -6,7 +6,7 @@ A CLI tool for gathering publicly available information about a username, domain
 
 ## What it does
 
-- **Username enumeration** — checks for account existence across 15 platforms concurrently (GitHub, X, Instagram, Reddit, TikTok, GitLab, Medium, Pinterest, Steam, Hacker News, Keybase, Dev.to, YouTube, Twitch, Docker Hub), with a two-tier trust model (see below)
+- **Username enumeration** — checks for account existence across 16 platforms concurrently (GitHub, X, Instagram, Reddit, TikTok, GitLab, Medium, Pinterest, Steam, Hacker News, Keybase, Dev.to, YouTube, Twitch, Docker Hub, Telegram), with a two-tier trust model (see below)
 - **Domain recon** — DNS resolution, WHOIS (registrar, dates, registrant, name servers), security headers, SPF/DMARC, technology fingerprinting (Cloudflare, Nginx, GitHub Pages, etc.), certificate issuer/validity, `robots.txt`/`security.txt`, HTTP redirect chains, and passive subdomain enumeration via Certificate Transparency logs (crt.sh)
 - **Email checks** — format validation, MX record lookup, and a live HaveIBeenPwned breach check (requires a paid API key; degrades gracefully without one)
 - **EXIF/GPS extraction** — camera make/model, timestamps, software, and GPS coordinates from a local photo, including HEIC/HEIF (the default format for iPhone photos)
@@ -21,7 +21,7 @@ A CLI tool for gathering publicly available information about a username, domain
 A plain HTTP status code (`200` = found, `404` = not found) is not trustworthy on its own — several platforms return `200` for accounts that don't exist, or block scripted requests entirely regardless of whether the account is real. Rather than take status codes at face value everywhere, each platform is checked and classified individually:
 
 - **Reliable, status-code-only** (GitHub, HackerNews, Keybase, Dev.to, Docker Hub) — server-rendered pages, a real 404 comes back for missing accounts, status code alone is trustworthy.
-- **Reliable, content-verified** (Steam, Medium) — the platform can return a `200` even for accounts that don't exist, so the response body is checked for a specific "not found" indicator (Steam) or the presence/absence of expected profile metadata (Medium's `og:title` tag) before trusting the result.
+- **Reliable, content-verified** (Steam, Medium, Telegram) — the platform can return a `200` even for accounts that don't exist, so the response body is checked for a specific "not found" indicator (Steam's not-found text, Telegram's `noindex` robots meta tag) or the presence/absence of expected profile metadata (Medium's `og:title` tag) before trusting the result.
 - **Unreliable / can't be confirmed via plain HTTP** (Twitter/X, Instagram, TikTok, Pinterest, YouTube, Twitch, Reddit, GitLab) — either a JavaScript single-page app that serves the same generic shell for any URL, real or fake (confirmed empirically: a deliberately fake Instagram username still returned 200), or a platform sitting behind bot-detection that blocks or challenges plain scripted requests regardless of username (Reddit currently serves the same "please wait for verification" interstitial for both real and fake usernames; GitLab's Cloudflare protection frequently 403s plain requests even for known-real accounts). These are always reported as `unclear`, never a false `found`.
 
 This isn't a static list — Reddit, for example, used to be checkable via a documented "not found" message (per the [Sherlock project](https://github.com/sherlock-project/sherlock)'s detection database), but empirical testing found that check no longer works against Reddit's current frontend, so it was moved to the unreliable tier rather than left silently wrong. Every result includes a `reason` field explaining exactly why it landed in `unclear`, so nothing is a black box.
@@ -73,7 +73,7 @@ Any of `--username` / `--domain` / `--email` / `--image` can be omitted — ever
 ## Example output
 
 ```
-[*] Checking username 'johndoe' across 15 platforms...
+[*] Checking username 'johndoe' across 16 platforms...
     [+] GitHub       FOUND     https://github.com/johndoe
     [-] Reddit       not found
     [?] Twitter/X    status=200 but this platform can't be reliably checked - not confirmed, verify manually
