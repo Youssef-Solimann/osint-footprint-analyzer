@@ -6,7 +6,7 @@ A CLI tool for gathering publicly available information about a username, domain
 
 ## What it does
 
-- **Username enumeration** — checks for account existence across 15 platforms (GitHub, X, Instagram, Reddit, TikTok, GitLab, Medium, Pinterest, Steam, Hacker News, Keybase, Dev.to, YouTube, Twitch, Docker Hub), with a two-tier trust model (see below)
+- **Username enumeration** — checks for account existence across 15 platforms concurrently (GitHub, X, Instagram, Reddit, TikTok, GitLab, Medium, Pinterest, Steam, Hacker News, Keybase, Dev.to, YouTube, Twitch, Docker Hub), with a two-tier trust model (see below)
 - **Domain recon** — DNS resolution, WHOIS (registrar, dates, registrant, name servers), security headers, SPF/DMARC, technology fingerprinting (Cloudflare, Nginx, GitHub Pages, etc.), certificate issuer/validity, `robots.txt`/`security.txt`, HTTP redirect chains, and passive subdomain enumeration via Certificate Transparency logs (crt.sh)
 - **Email checks** — format validation, MX record lookup, and a live HaveIBeenPwned breach check (requires a paid API key; degrades gracefully without one)
 - **EXIF/GPS extraction** — camera make/model, timestamps, software, and GPS coordinates from a local photo, including HEIC/HEIF (the default format for iPhone photos)
@@ -133,11 +133,11 @@ Each recon module reads/writes into one shared `report` dict; `risk.py` and `rep
 - **DKIM is not checked** — it lives under a selector-specific hostname (`selector._domainkey.domain.com`) with no way to know a domain's selector without prior knowledge, so any check would just be guessing at common selector names rather than reporting a real result. SPF and DMARC are checked.
 - **GitLab is frequently unreachable via plain scripted requests** — sits behind aggressive Cloudflare bot protection that 403s even known-real accounts under normal conditions; expect it to show up as `unclear` more often than other platforms.
 - **Subdomain enumeration is passive-only** (Certificate Transparency logs) — it will miss subdomains that never had a public HTTPS certificate issued.
-- **Requests are sequential**, not concurrent — a full username scan across 15 platforms takes several seconds.
+- **Domain recon requests are still sequential** — only username enumeration was moved to a thread pool so far.
 
 ## Roadmap
 
-- [ ] Concurrent platform/domain requests (`ThreadPoolExecutor`)
+- [ ] Concurrent domain recon requests (`ThreadPoolExecutor`)
 - [ ] Favicon hashing for Shodan-style fingerprinting
 - [ ] Config file for tunable constants (timeouts, retry limits, risk weights)
 - [ ] `--verbose`/`--quiet` logging levels in place of flat `print()`

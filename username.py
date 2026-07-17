@@ -1,10 +1,18 @@
 """Username enumeration across public platforms."""
 
-import time
+import concurrent.futures
 
 import requests
 
 import utils
+
+# each platform is a distinct host, so firing all checks at once doesn't
+# hammer any single server the way sequential-with-no-delay would - the
+# per-request 0.3s "politeness" sleep from the sequential version served no
+# purpose here and was dropped along with it. Capped well under the
+# platform count so a future long PLATFORMS list doesn't open dozens of
+# sockets at once.
+MAX_WORKERS = 10
 
 # --- platform list for username enumeration -------------------------------
 # format: name -> {"url": template, "reliable": bool, "not_found_text": str|None}
@@ -85,78 +93,89 @@ PLATFORMS = {
 }
 
 
+def _check_one(name, platform_info, username):
+    """
+    Runs a single platform's check and returns (bucket, entry, log_line)
+    rather than printing/appending directly - this runs inside a worker
+    thread, and interleaving prints from multiple threads at once would
+    produce garbled output, so the caller prints once results are back in
+    deterministic, PLATFORMS-ordered sequence.
+    """
+    url = platform_info["url"].format(u=username)
+    is_reliable = platform_info["reliable"]
+    try:
+        r = utils.get_with_retry(url)
+        entry = {"platform": name, "url": url, "status": r.status_code}
+        # r.history is non-empty whenever a redirect happened - surface it
+        # rather than silently following, since the final URL sometimes
+        # differs meaningfully (e.g. GitHub normalizes case: JohnDoe -> johndoe)
+        if r.history:
+            entry["redirected_to"] = r.url
+        if r.status_code == 404:
+            # a real 404 is trustworthy on every platform, reliable or not
+            return "not_found", entry, f"    [-] {name:12s} not found"
+        elif r.status_code == 200 and is_reliable:
+            not_found_text = platform_info.get("not_found_text")
+            needs_og_title = platform_info.get("requires_og_title", False)
+            if not_found_text and not_found_text in r.text:
+                # status said "found", but the page content itself says
+                # otherwise - trust the content, not the status code.
+                entry["reason"] = "HTTP 200 but page content matched known 'not found' text"
+                return "not_found", entry, f"    [-] {name:12s} not found (200 status, but page content confirms no such user)"
+            elif needs_og_title and 'property="og:title"' not in r.text:
+                # inverse case: absence of a piece of content signals
+                # absence of the account, not presence of "not found" text
+                entry["reason"] = "HTTP 200 but no og:title meta tag present (profile shell, not a real user page)"
+                return "not_found", entry, f"    [-] {name:12s} not found (200 status, but no og:title meta tag - generic shell page)"
+            else:
+                return "found", entry, f"    [+] {name:12s} FOUND     {url}"
+        elif r.status_code == 200 and not is_reliable:
+            # this platform is marked unreliable because a 200 here doesn't
+            # confirm anything - could be a JS SPA serving the same app
+            # shell for any URL (Instagram, TikTok, etc), or a bot-check/
+            # verification wall served regardless of username (Reddit,
+            # confirmed empirically). Either way, the status code alone
+            # can't distinguish a real account from a fake one here.
+            entry["reason"] = "Platform marked unreliable: HTTP 200 does not confirm account existence here"
+            return "unclear", entry, f"    [?] {name:12s} status=200 but this platform can't be reliably checked - not confirmed, verify manually  {url}"
+        else:
+            # unclear = could be a block (403), rate limit, redirect quirk, etc.
+            # NOT the same as "not found" - the account may well exist, we just can't tell.
+            # give a specific reason per known status code so downstream logic
+            # (risk scoring, correlation) doesn't have to re-derive it from a raw number.
+            if r.status_code == 403:
+                reason = "HTTP 403 Forbidden - likely anti-bot block, not evidence of absence"
+            elif r.status_code == 429:
+                reason = "HTTP 429 Too Many Requests - rate limited, try again later"
+            elif 500 <= r.status_code < 600:
+                reason = f"HTTP {r.status_code} - platform server error, not related to this username"
+            else:
+                reason = f"HTTP {r.status_code} - unrecognized status, not confirmed absent"
+            entry["reason"] = reason
+            return "unclear", entry, f"    [?] {name:12s} status={r.status_code} (unclear - {reason}) {url}"
+    except requests.exceptions.RequestException as e:
+        entry = {
+            "platform": name,
+            "url": url,
+            "reason": f"Request failed: {e.__class__.__name__}",
+        }
+        return "error", entry, f"    [!] {name:12s} error: {e.__class__.__name__}"
+
+
 def check_username(username):
     print(f"\n[*] Checking username '{username}' across {len(PLATFORMS)} platforms...")
     # every platform lands in exactly one bucket - nothing gets silently dropped anymore.
     results = {"found": [], "not_found": [], "unclear": [], "error": []}
-    for name, platform_info in PLATFORMS.items():
-        url = platform_info["url"].format(u=username)
-        is_reliable = platform_info["reliable"]
-        try:
-            r = utils.get_with_retry(url)
-            entry = {"platform": name, "url": url, "status": r.status_code}
-            # r.history is non-empty whenever a redirect happened - surface it
-            # rather than silently following, since the final URL sometimes
-            # differs meaningfully (e.g. GitHub normalizes case: JohnDoe -> johndoe)
-            if r.history:
-                entry["redirected_to"] = r.url
-            if r.status_code == 404:
-                # a real 404 is trustworthy on every platform, reliable or not
-                print(f"    [-] {name:12s} not found")
-                results["not_found"].append(entry)
-            elif r.status_code == 200 and is_reliable:
-                not_found_text = platform_info.get("not_found_text")
-                needs_og_title = platform_info.get("requires_og_title", False)
-                if not_found_text and not_found_text in r.text:
-                    # status said "found", but the page content itself says
-                    # otherwise - trust the content, not the status code.
-                    print(f"    [-] {name:12s} not found (200 status, but page content confirms no such user)")
-                    entry["reason"] = "HTTP 200 but page content matched known 'not found' text"
-                    results["not_found"].append(entry)
-                elif needs_og_title and 'property="og:title"' not in r.text:
-                    # inverse case: absence of a piece of content signals
-                    # absence of the account, not presence of "not found" text
-                    print(f"    [-] {name:12s} not found (200 status, but no og:title meta tag - generic shell page)")
-                    entry["reason"] = "HTTP 200 but no og:title meta tag present (profile shell, not a real user page)"
-                    results["not_found"].append(entry)
-                else:
-                    print(f"    [+] {name:12s} FOUND     {url}")
-                    results["found"].append(entry)
-            elif r.status_code == 200 and not is_reliable:
-                # this platform is marked unreliable because a 200 here doesn't
-                # confirm anything - could be a JS SPA serving the same app
-                # shell for any URL (Instagram, TikTok, etc), or a bot-check/
-                # verification wall served regardless of username (Reddit,
-                # confirmed empirically). Either way, the status code alone
-                # can't distinguish a real account from a fake one here.
-                print(f"    [?] {name:12s} status=200 but this platform can't be reliably checked - not confirmed, verify manually  {url}")
-                entry["reason"] = "Platform marked unreliable: HTTP 200 does not confirm account existence here"
-                results["unclear"].append(entry)
-            else:
-                # unclear = could be a block (403), rate limit, redirect quirk, etc.
-                # NOT the same as "not found" - the account may well exist, we just can't tell.
-                # give a specific reason per known status code so downstream logic
-                # (risk scoring, correlation) doesn't have to re-derive it from a raw number.
-                if r.status_code == 403:
-                    reason = "HTTP 403 Forbidden - likely anti-bot block, not evidence of absence"
-                elif r.status_code == 429:
-                    reason = "HTTP 429 Too Many Requests - rate limited, try again later"
-                elif 500 <= r.status_code < 600:
-                    reason = f"HTTP {r.status_code} - platform server error, not related to this username"
-                else:
-                    reason = f"HTTP {r.status_code} - unrecognized status, not confirmed absent"
-                print(f"    [?] {name:12s} status={r.status_code} (unclear - {reason}) {url}")
-                entry["reason"] = reason
-                results["unclear"].append(entry)
-            time.sleep(0.3)  # don't hammer, be polite - only between actual completed requests
-        except requests.exceptions.RequestException as e:
-            # no pacing sleep here: a timeout/connection failure already burned
-            # up to TIMEOUT seconds with no successful hit on the server, so
-            # there's nothing left to be "polite" about waiting on
-            print(f"    [!] {name:12s} error: {e.__class__.__name__}")
-            results["error"].append({
-                "platform": name,
-                "url": url,
-                "reason": f"Request failed: {e.__class__.__name__}",
-            })
+    with concurrent.futures.ThreadPoolExecutor(max_workers=min(MAX_WORKERS, len(PLATFORMS))) as executor:
+        futures = {
+            name: executor.submit(_check_one, name, platform_info, username)
+            for name, platform_info in PLATFORMS.items()
+        }
+        # iterate in PLATFORMS order (not completion order) so CLI output
+        # and bucket ordering stay deterministic across runs regardless of
+        # which platform happens to respond fastest
+        for name, future in futures.items():
+            bucket, entry, log_line = future.result()
+            print(log_line)
+            results[bucket].append(entry)
     return results
