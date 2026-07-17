@@ -2,7 +2,7 @@
 
 A CLI tool for gathering publicly available information about a username, domain, email address, or photo — and turning it into an assessment, not just a data dump.
 
-> **Status: v1.1.0.** Username enumeration, domain recon, email/breach checks, EXIF/GPS extraction, an identifier correlation engine, exposure risk scoring, and a self-contained HTML report are all in place, backed by a 161-test suite. See Roadmap below for what's deliberately left for later.
+> **Status: v1.1.0.** Username enumeration, domain recon, email/breach checks, EXIF/GPS extraction, an identifier correlation engine, exposure risk scoring, and a self-contained HTML report are all in place, backed by a 163-test suite. See Roadmap below for what's deliberately left for later.
 
 ## What it does
 
@@ -110,7 +110,7 @@ pip install -r requirements-dev.txt
 pytest
 ```
 
-161 tests: pure logic (risk scoring, correlation engine, WHOIS/EXIF parsing), every networked check via mocked `requests`/`dns.resolver`/`whois` (nothing hits the network during a test run), the HTML report renderer, and a full end-to-end integration test that runs the real `main()` — real argparse, real file writing — with every module wired together as a live invocation would be.
+163 tests: pure logic (risk scoring, correlation engine, WHOIS/EXIF parsing), every networked check via mocked `requests`/`dns.resolver`/`whois` (nothing hits the network during a test run), the HTML report renderer, CLI output wiring in `osint_footprint.py`, and a full end-to-end integration test that runs the real `main()` — real argparse, real file writing — with every module wired together as a live invocation would be.
 
 ## Architecture
 
