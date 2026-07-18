@@ -78,6 +78,25 @@ PLATFORMS = {
     # than a false FOUND, which is the honest answer. Expect GitLab to
     # show up as unclear more often than other reliable platforms.
     "GitLab":      {"url": "https://gitlab.com/{u}",                    "reliable": True, "not_found_text": None},
+    # LinkedIn: investigated harder than any other platform here, and still
+    # landed on unreliable. First pass (6 requests) and a spaced-out
+    # persistence check (10 requests over ~6 minutes, 5 distinct real
+    # profiles, repeats of both a real profile and a fake username) came
+    # back a clean 10/10 - real profiles 200 with og:title, fake usernames
+    # LinkedIn's custom anti-bot status 999. That looked like a genuine
+    # status-code signal, until a tighter follow-up test hit the SAME
+    # known-real profile (satyanadella) 5 times in a row and got
+    # 999, 999, 200, 999, 999 - the account flipping to a false "not
+    # found" 4 out of 5 times with zero change to the username itself.
+    # The earlier clean run wasn't a stable signal, it was requests spaced
+    # far enough apart to avoid whatever throttling/challenge state
+    # triggers the block - likely tightened further by this investigation's
+    # own cumulative request volume. This is exactly the failure mode
+    # GitLab was downgraded for, just harder to catch: it takes a tight
+    # burst against a KNOWN-real account to expose it, not a single
+    # snapshot test. Left unreliable; no status code or content signal
+    # here can be trusted not to flip.
+    "LinkedIn":    {"url": "https://www.linkedin.com/in/{u}/",          "reliable": False, "not_found_text": None},
     "Medium":      {"url": "https://medium.com/@{u}",                   "reliable": True, "not_found_text": None, "requires_og_title": True},
     "Steam":       {"url": "https://steamcommunity.com/id/{u}",         "reliable": True, "not_found_text": "The specified profile could not be found"},
     "HackerNews":  {"url": "https://news.ycombinator.com/user?id={u}",  "reliable": True, "not_found_text": None},

@@ -96,7 +96,7 @@ def _make_fake_get_with_retry(fake_response_cls):
             return fake_response_cls(status_code=200, text=ROBOTS_TXT_BODY)
         if url == f"https://{DOMAIN}/.well-known/security.txt":
             return fake_response_cls(status_code=200, text=SECURITY_TXT_BODY)
-        # one of the 16 username platform-check URLs
+        # one of the 17 username platform-check URLs
         return fake_response_cls(status_code=200, text="")
     return fake_get_with_retry
 
@@ -156,7 +156,7 @@ def test_full_pipeline_end_to_end(tmp_path, monkeypatch, fake_response):
 
     # --- username enumeration actually ran across all real platforms ---
     username_results = report["username_results"]
-    assert len(username_results["found"]) + len(username_results["not_found"]) + len(username_results["unclear"]) == 16
+    assert len(username_results["found"]) + len(username_results["not_found"]) + len(username_results["unclear"]) == 17
 
     # --- domain recon: DNS, WHOIS registrant fields, subdomains all present ---
     domain_results = report["domain_results"]
