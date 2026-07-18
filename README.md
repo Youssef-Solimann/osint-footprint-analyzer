@@ -6,6 +6,9 @@ A CLI tool for gathering publicly available information about a username, domain
 
 > **Status: v1.1.0.** Username enumeration, domain recon, email/breach checks, EXIF/GPS extraction, an identifier correlation engine, exposure risk scoring, and a self-contained HTML report are all in place, backed by a 163-test suite. See Roadmap below for what's deliberately left for later.
 
+<!-- SCREENSHOT 1: Executive Summary card (risk gauge + summary table) from the HTML report. Placed here so anyone landing on the README immediately sees a real run, not just claims. -->
+![Executive summary — risk score and findings overview](docs/screenshots/executive-summary.png)
+
 ## What it does
 
 - **Username enumeration** — checks account existence across 17 platforms concurrently (GitHub, X, Instagram, Reddit, TikTok, GitLab, LinkedIn, Medium, Pinterest, Steam, Hacker News, Keybase, Dev.to, YouTube, Twitch, Docker Hub, Telegram), using a two-tier trust model (see below)
@@ -29,6 +32,9 @@ A plain HTTP status code (`200` = found, `404` = not found) is not trustworthy o
 This isn't a static list — Reddit, for example, used to be checkable via a documented "not found" message (per the [Sherlock project](https://github.com/sherlock-project/sherlock)'s detection database), but empirical testing found that check no longer works against Reddit's current frontend, so it was moved to the unreliable tier rather than left silently wrong. Any `unclear` or `error` result — and any `not_found` result reached via content matching rather than a plain 404 — carries a machine-readable `reason` field explaining exactly why, so nothing is a black box.
 
 Results are split into four buckets — `found` / `unclear` / `not_found` / `error` — rather than a binary found/not-found, so the report never has to pretend certainty it doesn't have.
+
+<!-- SCREENSHOT 2: Username Footprint breakdown from the HTML report (Found / Unclear / Not Found counts + lists). Placed here to visually back up the "not silently assumed" claim made just above. -->
+![Username footprint — found, unclear, and not-found breakdown](docs/screenshots/username-footprint.png)
 
 ## Identifier correlation engine
 
@@ -63,9 +69,6 @@ python3 osint_footprint.py --email john@example.com
 python3 osint_footprint.py --image photo.heic
 
 # combine targets, save JSON and an HTML report
-python3 osint_footprint.py \
-  --username johndoe --domain example.com --email john@example.com --image photo.jpg \
-  --out results.json --html report.html
 
 # HIBP breach checking needs a paid API key - pass it directly or via env var
 python3 osint_footprint.py --email john@example.com --hibp-key YOUR_KEY
@@ -75,6 +78,9 @@ export HIBP_API_KEY=YOUR_KEY && python3 osint_footprint.py --email john@example.
 Any of `--username` / `--domain` / `--email` / `--image` can be omitted — every section of the report (and the risk score, and the correlation engine) adapts to whichever combination was actually supplied.
 
 ## Example output
+
+<!-- SCREENSHOT 3: Terminal screenshot of a full combined run — matches the command below exactly. Placed directly above the text transcript of the same run so the two reinforce each other. -->
+![Terminal output of a full combined scan](docs/screenshots/terminal-output.png)
 
 ```
 [*] Checking username 'johndoe' across 17 platforms...
