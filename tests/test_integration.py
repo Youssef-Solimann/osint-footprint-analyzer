@@ -221,11 +221,11 @@ def test_full_pipeline_end_to_end(tmp_path, monkeypatch, fake_response):
     assert "/admin" in html_out
     assert "security@janedoe.dev" in html_out
 
-    # --- executive summary reflects every category that ran ---
-    assert "confirmed" in html_out and "unclear" in html_out  # username line
-    assert "security headers present" in html_out
-    assert "known breach(es)" in html_out
-    assert "GPS coordinates found" in html_out
+    # --- executive summary dashboard reflects every category that ran ---
+    assert '<div class="kpi-label">Platforms Checked</div>' in html_out and "confirmed" in html_out
+    assert '<div class="kpi-label">Security Headers</div>' in html_out
+    assert '<div class="kpi-label">Breach Status</div>' in html_out
+    assert '<div class="kpi-label">GPS In Photo</div>' in html_out
 
     # --- GPS warning box and footer ---
     assert 'class="gps-warning"' in html_out

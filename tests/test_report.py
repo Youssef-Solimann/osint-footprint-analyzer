@@ -188,9 +188,9 @@ def test_email_security_shows_spf_and_dmarc_status():
     html_out = generate_html_report(report)
     assert "Email Security" in html_out
     assert "v=spf1 -all" in html_out
-    # SPF passed (checkmark), DMARC failed (cross) - both markers should appear
-    assert "&check;" in html_out
-    assert "&cross;" in html_out
+    # SPF passed, DMARC failed - both status chips should appear
+    assert '<span class="chip ok">Configured</span>' in html_out
+    assert '<span class="chip bad">Not found</span>' in html_out
 
 
 def test_well_known_files_render_disallow_entries_and_security_txt():
@@ -315,12 +315,12 @@ def test_executive_summary_summarizes_each_checked_category():
     }
     html_out = generate_html_report(report)
     assert 'id="summary"' in html_out
-    assert "2 confirmed, 1 unclear" in html_out
-    assert "1/2 security headers present" in html_out
-    assert "2 found" in html_out  # subdomains
-    assert "1 known breach(es)" in html_out
-    assert "GPS coordinates found" in html_out
-    assert "42/100 (Medium)" in html_out
+    assert '<div class="kpi-label">Platforms Checked</div><div class="kpi-value">2/3 confirmed</div>' in html_out
+    assert '<div class="kpi-label">Security Headers</div><div class="kpi-value">1/2 present</div>' in html_out
+    assert '<div class="kpi-label">Subdomains Found</div><div class="kpi-value">2</div>' in html_out
+    assert '<div class="kpi-label">Breach Status</div><div class="kpi-value bad">1 found</div>' in html_out
+    assert '<div class="kpi-label">GPS In Photo</div><div class="kpi-value bad">Yes</div>' in html_out
+    assert 'style="--dot:var(--sev-medium)"' in html_out
 
 
 def test_executive_summary_email_not_checked_says_so():
@@ -329,7 +329,7 @@ def test_executive_summary_email_not_checked_says_so():
         "email_results": {"email": "alice@example.com", "hibp": {"checked": False}},
     }
     html_out = generate_html_report(report)
-    assert "Breach check not performed" in html_out
+    assert '<div class="kpi-label">Breach Status</div><div class="kpi-value">Not checked</div>' in html_out
 
 
 def test_executive_summary_no_gps_says_so():
@@ -338,7 +338,7 @@ def test_executive_summary_no_gps_says_so():
         "exif_results": {"has_exif": True, "gps": None},
     }
     html_out = generate_html_report(report)
-    assert "No GPS data" in html_out
+    assert '<div class="kpi-label">GPS In Photo</div><div class="kpi-value ok">No</div>' in html_out
 
 
 # --- GPS warning box ---------------------------------------------------

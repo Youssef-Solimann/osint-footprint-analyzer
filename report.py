@@ -38,49 +38,70 @@ _SECTION_LABELS = {
 
 _REPORT_CSS = """
 :root {
-  --bg: #f2f4f1; --panel: #fbfcfa; --hairline: #d7dcd3; --fg: #16211f; --muted: #5c6960;
-  --accent: #0f6e5c; --ok: #2f9e44; --bad: #b42318; --bad-bg: #fdecea;
+  --bg: #eef1ed; --panel: #fdfefc; --hairline: #d9ded4; --fg: #131d1a; --muted: #5b6961;
+  --accent: #0b6b57; --accent-2: #0e8a70; --ok: #2f9e44; --bad: #b42318; --bad-bg: #fdecea;
   --sev-low: #2f9e44; --sev-medium: #b8860b; --sev-high: #c2610c; --sev-critical: #b42318;
-  --conf-high: #0f6e5c; --conf-medium: #b8860b; --conf-low: #5c6960;
+  --conf-high: #0b6b57; --conf-medium: #b8860b; --conf-low: #5b6961;
+  --shadow: 0 1px 2px rgba(20, 30, 25, 0.04), 0 6px 16px -8px rgba(20, 30, 25, 0.10);
+  --shadow-sm: 0 1px 2px rgba(20, 30, 25, 0.06);
   --mono: ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
   --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
 }
 @media (prefers-color-scheme: dark) {
   :root {
-    --bg: #101513; --panel: #171d1b; --hairline: #2a332f; --fg: #e7ece9; --muted: #93a39b;
-    --accent: #35b897; --ok: #51cf66; --bad: #ff6b6b; --bad-bg: #2a1512;
+    --bg: #0d1210; --panel: #161c19; --hairline: #29332e; --fg: #e9eeeb; --muted: #94a49b;
+    --accent: #39c2a0; --accent-2: #39c2a0; --ok: #51cf66; --bad: #ff6b6b; --bad-bg: #2a1512;
     --sev-low: #51cf66; --sev-medium: #e0b341; --sev-high: #ff922b; --sev-critical: #ff6b6b;
-    --conf-high: #35b897; --conf-medium: #e0b341; --conf-low: #93a39b;
+    --conf-high: #39c2a0; --conf-medium: #e0b341; --conf-low: #94a49b;
+    --shadow: 0 1px 2px rgba(0, 0, 0, 0.2), 0 8px 20px -8px rgba(0, 0, 0, 0.45);
+    --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.25);
   }
 }
 :root[data-theme="dark"] {
-  --bg: #101513; --panel: #171d1b; --hairline: #2a332f; --fg: #e7ece9; --muted: #93a39b;
-  --accent: #35b897; --ok: #51cf66; --bad: #ff6b6b; --bad-bg: #2a1512;
+  --bg: #0d1210; --panel: #161c19; --hairline: #29332e; --fg: #e9eeeb; --muted: #94a49b;
+  --accent: #39c2a0; --accent-2: #39c2a0; --ok: #51cf66; --bad: #ff6b6b; --bad-bg: #2a1512;
   --sev-low: #51cf66; --sev-medium: #e0b341; --sev-high: #ff922b; --sev-critical: #ff6b6b;
-  --conf-high: #35b897; --conf-medium: #e0b341; --conf-low: #93a39b;
+  --conf-high: #39c2a0; --conf-medium: #e0b341; --conf-low: #94a49b;
+  --shadow: 0 1px 2px rgba(0, 0, 0, 0.2), 0 8px 20px -8px rgba(0, 0, 0, 0.45);
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.25);
 }
 :root[data-theme="light"] {
-  --bg: #f2f4f1; --panel: #fbfcfa; --hairline: #d7dcd3; --fg: #16211f; --muted: #5c6960;
-  --accent: #0f6e5c; --ok: #2f9e44; --bad: #b42318; --bad-bg: #fdecea;
+  --bg: #eef1ed; --panel: #fdfefc; --hairline: #d9ded4; --fg: #131d1a; --muted: #5b6961;
+  --accent: #0b6b57; --accent-2: #0e8a70; --ok: #2f9e44; --bad: #b42318; --bad-bg: #fdecea;
   --sev-low: #2f9e44; --sev-medium: #b8860b; --sev-high: #c2610c; --sev-critical: #b42318;
-  --conf-high: #0f6e5c; --conf-medium: #b8860b; --conf-low: #5c6960;
+  --conf-high: #0b6b57; --conf-medium: #b8860b; --conf-low: #5b6961;
+  --shadow: 0 1px 2px rgba(20, 30, 25, 0.04), 0 6px 16px -8px rgba(20, 30, 25, 0.10);
+  --shadow-sm: 0 1px 2px rgba(20, 30, 25, 0.06);
 }
 * { box-sizing: border-box; }
-body { margin: 0; background: var(--bg); color: var(--fg); line-height: 1.55; font-family: var(--sans); font-size: 15px; }
+body {
+  margin: 0; background: var(--bg); color: var(--fg); line-height: 1.6; font-family: var(--sans);
+  font-size: 15px; -webkit-font-smoothing: antialiased;
+}
+body::before {
+  content: ""; display: block; height: 5px; width: 100%;
+  background: linear-gradient(90deg, var(--accent), var(--accent-2));
+}
 a { color: var(--accent); }
 a:focus-visible, summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .report {
-  max-width: 1080px; margin: 0 auto; padding: 2.5rem 1.5rem 5rem;
-  display: grid; grid-template-columns: 250px 1fr; gap: 2.25rem; align-items: start;
+  max-width: 1080px; margin: 0 auto; padding: 2.75rem 1.5rem 5rem;
+  display: grid; grid-template-columns: 254px 1fr; gap: 2.25rem; align-items: start;
 }
 .sidebar {
   position: sticky; top: 2rem; background: var(--panel); border: 1px solid var(--hairline);
-  border-radius: 8px; padding: 1.5rem;
+  border-radius: 10px; padding: 1.5rem; box-shadow: var(--shadow);
 }
-.wordmark { font-family: var(--mono); font-weight: 700; font-size: 1rem; letter-spacing: 0.01em; }
+.wordmark { display: flex; align-items: flex-start; gap: 0.6rem; }
+.wordmark-mark {
+  flex-shrink: 0; width: 1.6rem; height: 1.6rem; border-radius: 5px; margin-top: 0.1rem;
+  background: linear-gradient(155deg, var(--accent-2), var(--accent));
+  box-shadow: var(--shadow-sm);
+}
+.wordmark-text { font-family: var(--mono); font-weight: 700; font-size: 0.95rem; letter-spacing: 0.01em; line-height: 1.3; }
 .wordmark .sub {
-  display: block; font-weight: 500; color: var(--muted); font-size: 0.66rem;
-  letter-spacing: 0.14em; text-transform: uppercase; margin-top: 0.25rem;
+  display: block; font-weight: 500; color: var(--muted); font-size: 0.64rem;
+  letter-spacing: 0.13em; text-transform: uppercase; margin-top: 0.2rem;
 }
 .identity { margin: 1.25rem 0; display: flex; flex-direction: column; gap: 0.5rem; }
 .identity-row { display: flex; justify-content: space-between; gap: 0.75rem; }
@@ -90,35 +111,83 @@ a:focus-visible, summary:focus-visible { outline: 2px solid var(--accent); outli
 }
 .identity-row .v { text-align: right; font-weight: 600; font-size: 0.85rem; word-break: break-word; }
 .gauge-block { border-top: 1px solid var(--hairline); padding-top: 1.25rem; margin-top: 0.25rem; }
-.gauge { position: relative; width: 92px; height: 92px; margin: 0 auto; }
-.gauge svg { width: 100%; height: 100%; }
-.gauge-track { stroke: var(--hairline); stroke-width: 2.5; fill: none; }
-.gauge-fill { stroke-width: 2.5; stroke-linecap: round; fill: none; }
+.gauge { position: relative; width: 96px; height: 96px; margin: 0 auto; }
+.gauge svg { width: 100%; height: 100%; overflow: visible; }
+.gauge-track { stroke: var(--hairline); stroke-width: 3; fill: none; }
+.gauge-fill { stroke-width: 3; stroke-linecap: round; fill: none; transition: stroke-dasharray 0.2s ease; }
 .gauge-value { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; }
-.gauge-value .num { font-family: var(--mono); font-weight: 700; font-size: 1.3rem; font-variant-numeric: tabular-nums; }
+.gauge-value .num { font-family: var(--mono); font-weight: 700; font-size: 1.4rem; font-variant-numeric: tabular-nums; letter-spacing: -0.02em; }
 .gauge-value .max { font-size: 0.6rem; color: var(--muted); margin-top: -0.15rem; }
-.gauge-caption { text-align: center; margin-top: 0.6rem; }
+.gauge-caption { text-align: center; margin-top: 0.75rem; }
 .severity-pill {
   display: inline-block; color: #fff; font-family: var(--mono); font-weight: 600;
-  font-size: 0.68rem; letter-spacing: 0.05em; text-transform: uppercase;
-  padding: 0.2rem 0.6rem; border-radius: 3px;
+  font-size: 0.66rem; letter-spacing: 0.06em; text-transform: uppercase;
+  padding: 0.24rem 0.65rem; border-radius: 20px;
 }
 .no-score { color: var(--muted); font-size: 0.85rem; text-align: center; padding: 1rem 0; margin: 0; }
+.empty-state {
+  color: var(--muted); font-size: 0.86rem; background: var(--bg); border: 1px dashed var(--hairline);
+  border-radius: 7px; padding: 0.85rem 1rem; margin: 0.4rem 0 0;
+}
+.empty-state.bad { color: var(--bad); background: var(--bad-bg); border-color: var(--bad); border-color: color-mix(in srgb, var(--bad) 40%, transparent); }
 .toc { display: flex; flex-direction: column; gap: 0.15rem; margin-top: 1.25rem; padding-top: 1.25rem; border-top: 1px solid var(--hairline); }
 .toc-label { font-family: var(--mono); font-size: 0.64rem; text-transform: uppercase; letter-spacing: 0.08em; color: var(--muted); margin-bottom: 0.4rem; }
-.toc a { color: var(--fg); text-decoration: none; font-size: 0.85rem; padding: 0.25rem 0 0.25rem 0.6rem; border-left: 2px solid transparent; margin-left: -0.6rem; }
+.toc a { color: var(--fg); text-decoration: none; font-size: 0.85rem; padding: 0.3rem 0 0.3rem 0.65rem; border-left: 2px solid transparent; margin-left: -0.6rem; transition: border-color 0.15s ease, color 0.15s ease; }
 .toc a:hover, .toc a:focus-visible { border-left-color: var(--accent); color: var(--accent); }
 .meta { font-size: 0.72rem; color: var(--muted); margin-top: 1.25rem; }
 .main { display: flex; flex-direction: column; gap: 1.5rem; min-width: 0; }
-.panel { background: var(--panel); border: 1px solid var(--hairline); border-radius: 8px; padding: 1.5rem 1.75rem; scroll-margin-top: 1.5rem; }
-.panel h2 {
-  margin: 0 0 1.1rem; font-family: var(--mono); font-size: 0.72rem; font-weight: 600;
-  text-transform: uppercase; letter-spacing: 0.09em; color: var(--muted);
-  display: flex; align-items: center; gap: 0.55rem;
+.panel {
+  background: var(--panel); border: 1px solid var(--hairline); border-left: 3px solid var(--dot, var(--hairline));
+  border-radius: 8px; padding: 1.6rem 1.85rem; scroll-margin-top: 1.5rem; box-shadow: var(--shadow);
 }
-.panel h2::before { content: ""; width: 0.42rem; height: 0.42rem; border-radius: 50%; flex-shrink: 0; background: var(--dot, var(--hairline)); }
-.panel h3 { font-size: 0.68rem; color: var(--muted); text-transform: uppercase; letter-spacing: 0.07em; margin: 1.25rem 0 0.6rem; font-weight: 600; }
+.panel h2 {
+  margin: 0 0 1.15rem; padding-bottom: 0.9rem; border-bottom: 1px solid var(--hairline);
+  font-family: var(--mono); font-size: 0.74rem; font-weight: 600;
+  text-transform: uppercase; letter-spacing: 0.09em; color: var(--fg);
+}
+.panel h3 {
+  font-size: 0.66rem; color: var(--muted); text-transform: uppercase; letter-spacing: 0.08em;
+  margin: 1.5rem 0 0.7rem; font-weight: 600; padding-left: 0.6rem; border-left: 2px solid var(--hairline);
+}
 .panel h3:first-of-type { margin-top: 0; }
+/* one status chip used everywhere a pass/fail/neutral signal appears, so
+   the whole report reads as a single system instead of each panel inventing
+   its own green-tick / red-cross / colored-prose treatment */
+.chip {
+  display: inline-flex; align-items: center; gap: 0.32rem; font-family: var(--mono);
+  font-size: 0.68rem; font-weight: 600; letter-spacing: 0.02em; padding: 0.14rem 0.5rem;
+  border-radius: 20px; border: 1px solid transparent; white-space: nowrap; line-height: 1.4;
+}
+.chip::before { content: ""; width: 0.42rem; height: 0.42rem; border-radius: 50%; flex-shrink: 0; }
+.chip.ok { color: var(--ok); background: transparent; border-color: var(--ok); }
+.chip.ok { background: color-mix(in srgb, var(--ok) 12%, transparent); border-color: color-mix(in srgb, var(--ok) 30%, transparent); }
+.chip.ok::before { background: var(--ok); }
+.chip.bad { color: var(--bad); background: transparent; border-color: var(--bad); }
+.chip.bad { background: color-mix(in srgb, var(--bad) 12%, transparent); border-color: color-mix(in srgb, var(--bad) 30%, transparent); }
+.chip.bad::before { background: var(--bad); }
+.chip.neutral { color: var(--muted); background: transparent; border-color: var(--hairline); }
+.chip.neutral { background: color-mix(in srgb, var(--muted) 10%, transparent); }
+.chip.neutral::before { background: var(--muted); }
+/* a status line pairs a label with its chip and optional detail value, used
+   in place of the old bare <p>Format valid: yes</p> paragraphs */
+ul.status-list { list-style: none; padding-left: 0; margin: 0.25rem 0 0; }
+ul.status-list li { display: flex; flex-wrap: wrap; align-items: baseline; gap: 0.5rem 0.65rem; padding: 0.45rem 0; border-bottom: 1px solid var(--hairline); font-size: 0.88rem; }
+ul.status-list li:last-child { border-bottom: none; }
+ul.status-list .status-label { font-weight: 600; min-width: 8.5rem; }
+ul.status-list .status-detail { color: var(--muted); font-size: 0.85rem; min-width: 0; word-break: break-word; }
+.kpi-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 1rem; margin-bottom: 0.5rem; }
+.kpi-row + h3 { margin-top: 1.4rem; }
+.kpi-tile {
+  min-width: 0; background: var(--bg); border: 1px solid var(--hairline); border-radius: 7px;
+  padding: 0.85rem 1rem;
+}
+.kpi-label {
+  font-family: var(--mono); font-size: 0.62rem; font-weight: 600; text-transform: uppercase;
+  letter-spacing: 0.06em; color: var(--muted);
+}
+.kpi-value { font-family: var(--sans); font-weight: 700; font-size: 1.55rem; margin-top: 0.35rem; letter-spacing: -0.01em; }
+.kpi-value.ok { color: var(--ok); }
+.kpi-value.bad { color: var(--bad); }
 .muted { color: var(--muted); }
 .small { font-size: 0.83rem; }
 .ok { color: var(--ok); }
@@ -185,7 +254,9 @@ li.breach:last-child { border-bottom: none; }
 }
 @media print {
   body { background: #fff; color: #000; }
+  body::before { display: none; }
   .report { grid-template-columns: 200px 1fr; }
+  .sidebar, .panel { box-shadow: none; }
   .sidebar { position: static; break-inside: avoid; }
   .toc { display: none; }
   .panel { break-inside: avoid; }
@@ -216,6 +287,17 @@ def _collapsible_value(value, muted=True):
         f'<details class="value-details"><summary{summary_class}>{preview}</summary>'
         f'<div class="raw-text">{escaped}</div></details>'
     )
+
+
+def _chip(label, state="neutral"):
+    # state: "ok" | "bad" | "neutral" - the single source of truth for how a
+    # pass/fail/unknown signal looks anywhere in the report
+    return f'<span class="chip {state}">{html.escape(str(label))}</span>'
+
+
+def _status_row(label, chip_html, detail_html=""):
+    detail = f'<span class="status-detail">{detail_html}</span>' if detail_html else ""
+    return f'<li><span class="status-label">{html.escape(label)}</span>{chip_html}{detail}</li>'
 
 
 def _html_sidebar(report, nav_html):
@@ -253,7 +335,10 @@ def _html_sidebar(report, nav_html):
     generated_at = html.escape(str(report.get("generated_at", "")))
     return f"""
     <aside class="sidebar">
-      <div class="wordmark">OSINT FOOTPRINT<span class="sub">Analyzer &middot; Report</span></div>
+      <div class="wordmark">
+        <span class="wordmark-mark"></span>
+        <span class="wordmark-text">OSINT FOOTPRINT<span class="sub">Analyzer &middot; Report</span></span>
+      </div>
       <div class="identity">{rows}</div>
       {gauge_html}
       <nav class="toc">
@@ -267,20 +352,24 @@ def _html_sidebar(report, nav_html):
 
 def _html_executive_summary_section(report):
     """
-    A 30-second-scan rollup at the top of the report, one line per
-    category that actually ran - reads only from data every other
-    section already computed, adds nothing new. Skips a category
-    entirely rather than showing a fabricated "n/a" when it wasn't
-    part of this scan, same philosophy as the correlations section
-    skipping single-identifier runs.
+    A dashboard-style rollup at the top of the report, meant to hold the
+    whole story in one screen before the detailed sections below: a row
+    of KPI stat tiles for the headline numbers, plus a condensed "Top
+    Findings" list pulled from the full risk/correlation breakdowns
+    further down the page. Reads only from data every other section
+    already computed, adds nothing new. Skips a tile (or the whole
+    section) entirely rather than showing a fabricated placeholder for
+    a category that wasn't part of this scan, same philosophy as the
+    correlations section skipping single-identifier runs.
     """
-    rows = []
+    risk = report.get("risk_score")
+    tiles = []  # (label, value, css_class|None)
 
     username_results = report.get("username_results")
     if username_results:
         found = len(username_results.get("found", []))
-        unclear = len(username_results.get("unclear", []))
-        rows.append(("Username", f"{found} confirmed, {unclear} unclear"))
+        total = sum(len(username_results.get(b, [])) for b in ("found", "not_found", "unclear", "error"))
+        tiles.append(("Platforms Checked", f"{found}/{total} confirmed", None))
 
     domain_results = report.get("domain_results")
     if domain_results:
@@ -288,41 +377,70 @@ def _html_executive_summary_section(report):
         missing = domain_results.get("security_headers_missing", [])
         total_headers = len(present) + len(missing)
         if total_headers:
-            rows.append(("Domain", f"{len(present)}/{total_headers} security headers present"))
+            css = "ok" if len(present) == total_headers else ("bad" if not present else None)
+            tiles.append(("Security Headers", f"{len(present)}/{total_headers} present", css))
         subdomain_info = domain_results.get("subdomains", {})
         if isinstance(subdomain_info, dict) and subdomain_info.get("success"):
-            rows.append(("Subdomains", f"{len(subdomain_info.get('subdomains', []))} found"))
+            tiles.append(("Subdomains Found", str(len(subdomain_info.get("subdomains", []))), None))
+
+    correlations = report.get("correlations")
+    if correlations is not None:
+        tiles.append(("Correlations Found", str(len(correlations)), None))
 
     email_results = report.get("email_results")
     if email_results:
         hibp = email_results.get("hibp", {})
         if hibp.get("checked"):
             breach_count = len(hibp.get("breaches", []))
-            rows.append(("Email", f"{breach_count} known breach(es)" if breach_count else "No known breaches"))
+            value = f"{breach_count} found" if breach_count else "Clean"
+            tiles.append(("Breach Status", value, "bad" if breach_count else "ok"))
         else:
-            rows.append(("Email", "Breach check not performed"))
+            tiles.append(("Breach Status", "Not checked", None))
 
     exif_results = report.get("exif_results")
     if exif_results:
         if exif_results.get("gps"):
-            rows.append(("Image", "GPS coordinates found"))
+            tiles.append(("GPS In Photo", "Yes", "bad"))
         elif exif_results.get("has_exif"):
-            rows.append(("Image", "No GPS data"))
+            tiles.append(("GPS In Photo", "No", "ok"))
         else:
-            rows.append(("Image", "No EXIF data"))
+            tiles.append(("GPS In Photo", "No EXIF", None))
 
-    risk = report.get("risk_score")
+    tiles_html = "".join(
+        f'<div class="kpi-tile"><div class="kpi-label">{html.escape(label)}</div>'
+        f'<div class="kpi-value{" " + css if css else ""}">{html.escape(value)}</div></div>'
+        for label, value, css in tiles
+    )
+    kpi_html = f'<div class="kpi-row">{tiles_html}</div>' if tiles else ""
+
+    # Top Findings: high-confidence correlations first (the strongest kind
+    # of evidence this tool produces), then the highest-point risk rules -
+    # a condensed teaser for the full breakdowns in the Correlations and
+    # Exposure Assessment panels further down.
+    top_items = []  # (badge_label, badge_color, description)
+    for c in (correlations or []):
+        if c.get("confidence") == "High":
+            top_items.append(("LINK", "var(--accent)", c["description"]))
     if risk:
-        rows.append(("Overall risk", f"{risk['score']}/{risk['max_score']} ({risk['severity']})"))
+        severity_color = _SEVERITY_COLORS.get(risk.get("severity"), "var(--conf-low)")
+        for t in sorted(risk.get("triggered_rules", []), key=lambda rule: rule["points"], reverse=True):
+            top_items.append(("RISK", severity_color, t["description"]))
+    top_items = top_items[:4]
 
-    if not rows:
+    findings_html = ""
+    if top_items:
+        items_html = "".join(
+            f'<li class="finding"><span class="badge" style="background:{color}">{badge}</span>'
+            f'<span>{html.escape(desc)}</span></li>'
+            for badge, color, desc in top_items
+        )
+        findings_html = f'<h3>Top Findings</h3><ul class="findings">{items_html}</ul>'
+
+    if not kpi_html and not findings_html:
         return ""
 
-    row_html = "".join(
-        f"<tr><td>{html.escape(label)}</td><td>{html.escape(value)}</td></tr>" for label, value in rows
-    )
-    body = f'<div class="table-wrap"><table class="kv">{row_html}</table></div>'
-    return _panel("summary", "Executive Summary", body)
+    dot_color = _SEVERITY_COLORS.get(risk.get("severity")) if risk else None
+    return _panel("summary", "Executive Summary", kpi_html + findings_html, dot_color=dot_color)
 
 
 def _html_risk_section(risk):
@@ -409,9 +527,9 @@ def _html_domain_section(results):
     dns_records = results.get("dns_records", {})
     dns_note = ""
     if dns_records.get("skipped"):
-        dns_note = f'<p class="muted small">{html.escape(str(dns_records.get("reason", "")))}</p>'
+        dns_note = f'<div class="empty-state">{html.escape(str(dns_records.get("reason", "")))}</div>'
     elif dns_records.get("nxdomain"):
-        dns_note = '<p class="bad small">Domain does not exist (NXDOMAIN)</p>'
+        dns_note = '<div class="empty-state bad">Domain does not exist (NXDOMAIN)</div>'
 
     def _dns_value_cell(values):
         return _collapsible_value(", ".join(values), muted=False) if values else '<span class="muted">none</span>'
@@ -447,11 +565,11 @@ def _html_domain_section(results):
     present = results.get("security_headers_present", {})
     missing = results.get("security_headers_missing", [])
     headers_items = "".join(
-        f'<li class="ok">&check; {html.escape(h)}: {_collapsible_value(v)}</li>'
+        _status_row(h, _chip("Present", "ok"), _collapsible_value(v))
         for h, v in present.items()
     )
-    headers_items += "".join(f'<li class="bad">&cross; {html.escape(h)}</li>' for h in missing)
-    headers_html = f'<ul class="headers">{headers_items}</ul>' if headers_items else ""
+    headers_items += "".join(_status_row(h, _chip("Missing", "bad")) for h in missing)
+    headers_html = f'<ul class="status-list">{headers_items}</ul>' if headers_items else ""
 
     redirect_chain = results.get("redirect_chain") or []
     redirect_html = (
@@ -466,15 +584,14 @@ def _html_domain_section(results):
     )
 
     def _email_sec_row(label, ok, record):
-        css_class = "ok" if ok else "bad"
-        mark = "&check;" if ok else "&cross;"
-        detail = f': {_collapsible_value(record)}' if ok and record else ""
-        return f'<li class="{css_class}">{mark} {label}{detail}</li>'
+        chip = _chip("Configured", "ok") if ok else _chip("Not found", "bad")
+        detail = _collapsible_value(record) if ok and record else ""
+        return _status_row(label, chip, detail)
 
     email_sec = results.get("email_security") or {}
     if email_sec:
         email_sec_html = (
-            "<ul class=\"headers\">"
+            "<ul class=\"status-list\">"
             + _email_sec_row("SPF", email_sec.get("spf"), email_sec.get("spf_record"))
             + _email_sec_row("DMARC", email_sec.get("dmarc"), email_sec.get("dmarc_record"))
             + "</ul>"
@@ -544,28 +661,41 @@ def _html_email_section(results):
     hibp = results.get("hibp", {})
     dot = None
 
+    # top-of-panel status list: format, MX, and a one-line breach verdict,
+    # all sharing the same chip vocabulary as the rest of the report
+    status_items = _status_row(
+        "Format", _chip("Valid", "ok") if valid else _chip("Invalid", "bad")
+    )
+    status_items += _status_row(
+        "MX records",
+        _chip("Present", "ok") if mx else _chip("None", "neutral"),
+        _collapsible_value(", ".join(mx)) if mx else "",
+    )
+
+    breach_detail = ""
     if hibp.get("checked"):
         breaches = hibp.get("breaches", [])
         if breaches:
             dot = "var(--sev-high)"
+            status_items += _status_row(
+                "Breaches", _chip(f"{len(breaches)} found", "bad")
+            )
             items = "".join(
                 f'<li class="breach"><strong>{html.escape(b.get("title", ""))}</strong> '
                 f'<span class="muted small">({html.escape(b.get("breach_date", ""))})</span>'
                 f'<div class="muted small">Exposed: {html.escape(", ".join(b.get("data_classes", [])))}</div></li>'
                 for b in breaches
             )
-            hibp_html = f'<p class="bad">Breached in {len(breaches)} known breach(es):</p><ul class="breaches">{items}</ul>'
+            breach_detail = (
+                f'<h3>Breach Detail (HaveIBeenPwned)</h3><ul class="breaches">{items}</ul>'
+            )
         else:
-            hibp_html = '<p class="ok">No known breaches (HaveIBeenPwned)</p>'
+            status_items += _status_row("Breaches", _chip("None known", "ok"))
     else:
         reason = hibp.get("reason") or "Not checked"
-        hibp_html = f'<p class="muted">Breach check skipped: {html.escape(reason)}</p>'
+        status_items += _status_row("Breaches", _chip("Not checked", "neutral"), html.escape(reason))
 
-    body = f"""
-      <p>Format valid: {"&check; yes" if valid else "&cross; no"}</p>
-      {f'<p>MX records: {html.escape(", ".join(mx))}</p>' if mx else ""}
-      {hibp_html}
-    """
+    body = f'<ul class="status-list">{status_items}</ul>{breach_detail}'
     return _panel("email", f"Email: {email_raw}", body, dot_color=dot)
 
 
@@ -581,8 +711,8 @@ def _html_exif_section(results):
 
     if not results.get("has_exif"):
         file_name = html.escape(str(results.get("file", "")))
-        body = f'<p class="muted small">{file_name}</p>' if file_name else ""
-        body += warnings_html or '<p class="muted">No EXIF data present.</p>'
+        file_line = f'<p class="muted small">{file_name}</p>' if file_name else ""
+        body = file_line + (warnings_html or '<div class="empty-state">No EXIF metadata present in this image.</div>')
         return _panel("exif", "Image Metadata (EXIF)", body)
 
     rows = ""
