@@ -1,5 +1,7 @@
 """Domain reconnaissance: DNS, WHOIS, security headers, subdomain enumeration."""
 
+import concurrent.futures
+
 import requests
 
 import utils
@@ -36,7 +38,7 @@ def _fingerprint_technologies(headers):
     return sorted(detected)
 
 
-def check_subdomains(domain):
+def check_subdomains(domain, _print=print):
     """
     Passive subdomain enumeration via crt.sh (Certificate Transparency logs).
     Every HTTPS cert issued gets publicly logged - we're just reading those
@@ -52,8 +54,14 @@ def check_subdomains(domain):
     Also surfaces the most recently issued certificate's issuer and
     validity window - crt.sh's response already includes this per entry,
     so it's free once we're already parsing the response for subdomains.
+
+    _print defaults to the builtin print but check_domain passes a
+    line-collecting substitute instead, since this now runs concurrently
+    with the domain's other checks - printing directly here would
+    interleave with their output the same way check_username() had to
+    guard against for concurrent platform checks.
     """
-    print(f"\n[*] Searching Certificate Transparency logs for '{domain}' subdomains...")
+    _print(f"\n[*] Searching Certificate Transparency logs for '{domain}' subdomains...")
     # status starts as None: we may fail before ever getting an HTTP response
     # at all (e.g. connection error), in which case there's no status code to
     # report - that's meaningfully different from "we got a bad status code".
@@ -72,15 +80,15 @@ def check_subdomains(domain):
         # "HTTPError" for every non-2xx response.
         if r.status_code == 429:
             result["reason"] = "HTTP 429 Too Many Requests - crt.sh rate limited us, try again later"
-            print(f"    [!] {result['reason']}")
+            _print(f"    [!] {result['reason']}")
             return result
         elif r.status_code == 503:
             result["reason"] = "HTTP 503 Service Unavailable - crt.sh is temporarily down"
-            print(f"    [!] {result['reason']}")
+            _print(f"    [!] {result['reason']}")
             return result
         elif r.status_code != 200:
             result["reason"] = f"HTTP {r.status_code} - unexpected response from crt.sh"
-            print(f"    [!] {result['reason']}")
+            _print(f"    [!] {result['reason']}")
             return result
 
         entries = r.json()
@@ -112,23 +120,23 @@ def check_subdomains(domain):
         result["success"] = True
         result["subdomains"] = subdomains_list
         result["latest_certificate"] = latest_cert
-        print(f"    [+] Found {len(subdomains_list)} unique subdomains")
+        _print(f"    [+] Found {len(subdomains_list)} unique subdomains")
         if latest_cert:
-            print(f"    [+] Latest certificate issued by {latest_cert['issuer']}, valid {latest_cert['not_before']} to {latest_cert['not_after']}")
+            _print(f"    [+] Latest certificate issued by {latest_cert['issuer']}, valid {latest_cert['not_before']} to {latest_cert['not_after']}")
         for s in subdomains_list[:20]:  # don't flood the console on huge results
-            print(f"        {s}")
+            _print(f"        {s}")
         if len(subdomains_list) > 20:
-            print(f"        ... and {len(subdomains_list) - 20} more (see JSON output)")
+            _print(f"        ... and {len(subdomains_list) - 20} more (see JSON output)")
         return result
 
     except requests.exceptions.RequestException as e:
         result["reason"] = f"Request failed: {e.__class__.__name__}"
-        print(f"    [!] crt.sh request failed: {result['reason']}")
+        _print(f"    [!] crt.sh request failed: {result['reason']}")
         return result
     except ValueError as e:
         # crt.sh returns HTML instead of JSON when it's overloaded/rate limiting
         result["reason"] = f"crt.sh returned a non-JSON response (likely overloaded): {e}"
-        print(f"    [!] {result['reason']}")
+        _print(f"    [!] {result['reason']}")
         return result
 
 
@@ -147,7 +155,7 @@ def _normalize_whois_value(value):
     return value
 
 
-def check_dns_records(domain):
+def check_dns_records(domain, _print=print):
     """
     Looks up A, AAAA, MX, NS, TXT, and CNAME records for the domain via
     dnspython. Each record type is queried independently - a domain
@@ -155,15 +163,19 @@ def check_dns_records(domain):
     domain, no AAAA if IPv6 isn't configured), so a missing record type
     is normal, not an error. Only NXDOMAIN (the domain doesn't exist at
     all) or a missing dnspython install stop the whole lookup early.
+
+    _print defaults to the builtin print but check_domain passes a
+    line-collecting substitute instead, since this now runs concurrently
+    with the domain's other checks (see check_subdomains for why).
     """
-    print(f"\n[*] Looking up DNS records for '{domain}'...")
+    _print(f"\n[*] Looking up DNS records for '{domain}'...")
     record_types = ["A", "AAAA", "MX", "NS", "TXT", "CNAME"]
     results = {rtype: [] for rtype in record_types}
 
     try:
         import dns.resolver
     except ImportError:
-        print("    [!] dnspython not installed, skipping DNS record lookup. Run: pip install dnspython")
+        _print("    [!] dnspython not installed, skipping DNS record lookup. Run: pip install dnspython")
         return {"skipped": True, "reason": "dnspython not installed", **results}
 
     for rtype in record_types:
@@ -171,26 +183,26 @@ def check_dns_records(domain):
             answers = dns.resolver.resolve(domain, rtype)
             values = sorted(str(r) for r in answers)
             results[rtype] = values
-            print(f"    [+] {rtype:6s} ({len(values)}): {', '.join(values)}")
+            _print(f"    [+] {rtype:6s} ({len(values)}): {', '.join(values)}")
         except dns.resolver.NXDOMAIN:
             # domain doesn't exist at all - every other record type will
             # fail the same way, no point querying the rest
-            print(f"    [-] Domain does not exist (NXDOMAIN)")
+            _print("    [-] Domain does not exist (NXDOMAIN)")
             results["nxdomain"] = True
             break
         except dns.resolver.NoAnswer:
             # this record type genuinely doesn't exist for this domain -
             # normal, not an error (e.g. most domains have no CNAME on the apex)
-            print(f"    [ ] {rtype:6s}: none")
+            _print(f"    [ ] {rtype:6s}: none")
         except dns.resolver.NoNameservers:
-            print(f"    [!] {rtype:6s}: no nameservers responded")
+            _print(f"    [!] {rtype:6s}: no nameservers responded")
         except Exception as e:
-            print(f"    [!] {rtype:6s}: lookup failed ({e.__class__.__name__})")
+            _print(f"    [!] {rtype:6s}: lookup failed ({e.__class__.__name__})")
 
     return results
 
 
-def _check_email_security(domain, txt_records):
+def _check_email_security(domain, txt_records, _print=print):
     """
     SPF lives in the domain's own TXT records (already fetched by
     check_dns_records) - just look for the v=spf1 marker. DMARC lives at
@@ -201,6 +213,10 @@ def _check_email_security(domain, txt_records):
     there's no way to know a domain's selector without prior knowledge,
     so any check here would just be guessing at common selector names
     rather than reporting a real result.
+
+    _print defaults to the builtin print but check_domain passes a
+    line-collecting substitute instead, since this now runs concurrently
+    with the domain's other checks (see check_subdomains for why).
     """
     spf_record = next(
         (t.strip('"') for t in txt_records if t.strip('"').lower().startswith("v=spf1")),
@@ -222,6 +238,8 @@ def _check_email_security(domain, txt_records):
     except Exception:
         pass  # no DMARC record, or the lookup failed - either way, "not found"
 
+    _print(f"    [{'+' if result['spf'] else '-'}] SPF record {'found' if result['spf'] else 'not found'}")
+    _print(f"    [{'+' if result['dmarc'] else '-'}] DMARC record {'found' if result['dmarc'] else 'not found'}")
     return result
 
 
@@ -258,18 +276,13 @@ def check_well_known(domain):
     return result
 
 
-def check_domain(domain):
-    print(f"\n[*] Domain recon for '{domain}'...")
+def _check_whois(domain, _print=print):
+    """
+    WHOIS lookup, extracted out of check_domain so it can run in its own
+    thread. _print defaults to the builtin print but check_domain passes a
+    line-collecting substitute instead (see check_subdomains for why).
+    """
     result = {}
-
-    # DNS records - A, AAAA, MX, NS, TXT, CNAME
-    dns_records = check_dns_records(domain)
-    result["dns_records"] = dns_records
-    # keep "ip" for backward compatibility with anything reading the old
-    # single-A-record shape - just the first A record, if any
-    result["ip"] = dns_records.get("A", [None])[0] if dns_records.get("A") else None
-
-    # WHOIS - try python-whois if installed, else skip gracefully
     try:
         import whois as whois_lib
         w = whois_lib.whois(domain)
@@ -299,23 +312,33 @@ def check_domain(domain):
         result["registrant_org"] = str(registrant_org) if registrant_org else None
         result["registrant_emails"] = registrant_emails
 
-        print(f"    [+] Registrar: {result['registrar']}")
-        print(f"    [+] Created:   {result['creation_date']}")
-        print(f"    [+] Expires:   {result['expiration_date']}")
+        _print(f"    [+] Registrar: {result['registrar']}")
+        _print(f"    [+] Created:   {result['creation_date']}")
+        _print(f"    [+] Expires:   {result['expiration_date']}")
         if result["registrant_name"]:
-            print(f"    [+] Registrant name: {result['registrant_name']}")
+            _print(f"    [+] Registrant name: {result['registrant_name']}")
         if result["registrant_org"]:
-            print(f"    [+] Registrant org:  {result['registrant_org']}")
+            _print(f"    [+] Registrant org:  {result['registrant_org']}")
         if registrant_emails:
-            print(f"    [+] Registrant email(s): {', '.join(registrant_emails)}")
+            _print(f"    [+] Registrant email(s): {', '.join(registrant_emails)}")
     except ImportError:
-        print("    [!] python-whois not installed, skipping WHOIS. Run: pip install python-whois")
+        _print("    [!] python-whois not installed, skipping WHOIS. Run: pip install python-whois")
         result["whois"] = "SKIPPED - install python-whois"
     except Exception as e:
-        print(f"    [!] WHOIS lookup failed: {e}")
+        _print(f"    [!] WHOIS lookup failed: {e}")
         result["whois_error"] = str(e)
+    return result
 
-    # basic security headers check on the site
+
+def _check_security_headers(domain, _print=print):
+    """
+    Security headers, redirect chain, and technology fingerprinting - all
+    read off the same single request to the site's root, extracted out of
+    check_domain so it can run in its own thread. _print defaults to the
+    builtin print but check_domain passes a line-collecting substitute
+    instead (see check_subdomains for why).
+    """
+    result = {}
     try:
         r = utils.get_with_retry(f"https://{domain}")
         sec_headers = ["Strict-Transport-Security", "Content-Security-Policy",
@@ -324,39 +347,99 @@ def check_domain(domain):
         missing = [h for h in sec_headers if h not in r.headers]
         result["security_headers_present"] = present
         result["security_headers_missing"] = missing
-        print(f"    [+] Security headers present: {list(present.keys())}")
+        _print(f"    [+] Security headers present: {list(present.keys())}")
         if missing:
-            print(f"    [-] Security headers missing: {missing}")
+            _print(f"    [-] Security headers missing: {missing}")
 
         # r.history holds every hop before the final response - only
         # present when a redirect actually happened (e.g. http -> https -> www)
         if r.history:
             result["redirect_chain"] = [h.url for h in r.history] + [r.url]
-            print(f"    [+] Redirect chain: {' -> '.join(result['redirect_chain'])}")
+            _print(f"    [+] Redirect chain: {' -> '.join(result['redirect_chain'])}")
 
         technologies = _fingerprint_technologies(r.headers)
         if technologies:
             result["technologies"] = technologies
-            print(f"    [+] Technologies detected: {', '.join(technologies)}")
+            _print(f"    [+] Technologies detected: {', '.join(technologies)}")
     except requests.exceptions.RequestException as e:
-        print(f"    [!] Could not fetch site headers: {e}")
+        _print(f"    [!] Could not fetch site headers: {e}")
+    return result
 
-    # email security: SPF (from the TXT records already fetched) + DMARC
-    email_security = _check_email_security(domain, dns_records.get("TXT", []))
-    result["email_security"] = email_security
-    print(f"    [{'+' if email_security['spf'] else '-'}] SPF record {'found' if email_security['spf'] else 'not found'}")
-    print(f"    [{'+' if email_security['dmarc'] else '-'}] DMARC record {'found' if email_security['dmarc'] else 'not found'}")
 
-    # robots.txt / security.txt - both published at fixed, expected-public paths
-    well_known = check_well_known(domain)
-    result["robots_disallow"] = well_known["robots_disallow"]
-    result["security_txt"] = well_known["security_txt"]
-    if result["robots_disallow"]:
-        print(f"    [+] robots.txt Disallow entries: {len(result['robots_disallow'])}")
-    if result["security_txt"]:
-        print("    [+] security.txt found")
+def _line_collector():
+    """
+    Returns a print-alike callable plus the list it appends to, instead of
+    writing straight to stdout. check_domain runs several checks
+    concurrently and flushes each one's lines together, in a fixed order,
+    once that check's future resolves - otherwise interleaved output from
+    several threads printing at once would come out garbled, the same
+    problem check_username() solves for its 17 concurrent platform checks.
+    """
+    lines = []
 
-    # subdomain enumeration via Certificate Transparency logs
-    result["subdomains"] = check_subdomains(domain)
+    def _print(*args, **kwargs):
+        lines.append(kwargs.get("sep", " ").join(str(a) for a in args))
+
+    return _print, lines
+
+
+def check_domain(domain):
+    print(f"\n[*] Domain recon for '{domain}'...")
+    result = {}
+
+    dns_print, dns_lines = _line_collector()
+    whois_print, whois_lines = _line_collector()
+    headers_print, headers_lines = _line_collector()
+    subdomains_print, subdomains_lines = _line_collector()
+    email_print, email_lines = _line_collector()
+
+    # DNS, WHOIS, security headers, well-known files, and subdomains are
+    # all independent of each other - only email security depends on the
+    # DNS TXT records, so it's submitted once those are back rather than
+    # upfront with the rest.
+    with concurrent.futures.ThreadPoolExecutor(max_workers=5) as executor:
+        dns_future = executor.submit(check_dns_records, domain, dns_print)
+        whois_future = executor.submit(_check_whois, domain, whois_print)
+        headers_future = executor.submit(_check_security_headers, domain, headers_print)
+        wellknown_future = executor.submit(check_well_known, domain)
+        subdomains_future = executor.submit(check_subdomains, domain, subdomains_print)
+
+        dns_records = dns_future.result()
+        for line in dns_lines:
+            print(line)
+        result["dns_records"] = dns_records
+        # keep "ip" for backward compatibility with anything reading the old
+        # single-A-record shape - just the first A record, if any
+        result["ip"] = dns_records.get("A", [None])[0] if dns_records.get("A") else None
+
+        email_future = executor.submit(_check_email_security, domain, dns_records.get("TXT", []), email_print)
+
+        whois_result = whois_future.result()
+        for line in whois_lines:
+            print(line)
+        result.update(whois_result)
+
+        headers_result = headers_future.result()
+        for line in headers_lines:
+            print(line)
+        result.update(headers_result)
+
+        email_security = email_future.result()
+        for line in email_lines:
+            print(line)
+        result["email_security"] = email_security
+
+        well_known = wellknown_future.result()
+        result["robots_disallow"] = well_known["robots_disallow"]
+        result["security_txt"] = well_known["security_txt"]
+        if result["robots_disallow"]:
+            print(f"    [+] robots.txt Disallow entries: {len(result['robots_disallow'])}")
+        if result["security_txt"]:
+            print("    [+] security.txt found")
+
+        subdomains_result = subdomains_future.result()
+        for line in subdomains_lines:
+            print(line)
+        result["subdomains"] = subdomains_result
 
     return result

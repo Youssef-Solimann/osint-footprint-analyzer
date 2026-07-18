@@ -127,8 +127,8 @@ Each recon module reads/writes into one shared `report` dict; `risk.py` and `rep
 ## Performance
 
 - Username checks across all 17 platforms run concurrently via a `ThreadPoolExecutor` (`username.py`) — a full scan takes roughly one request's round trip instead of stacking 17 sequential ones.
+- Domain recon (DNS, WHOIS, security headers, SPF/DMARC, `robots.txt`/`security.txt`, subdomain enumeration) also runs concurrently via a `ThreadPoolExecutor` (`domain.py`) — total time is bounded by the slowest single check (usually the crt.sh subdomain lookup) rather than the sum of all of them. Each check's console output is collected and flushed together, in order, once its result is back, so concurrent output doesn't interleave into something unreadable.
 - Every HTTP request retries on `429 Too Many Requests` with exponential backoff (or the server's own `Retry-After` header when present), capped at a maximum wait (`utils.py`).
-- Domain recon is still sequential — see Roadmap.
 
 ## Running tests
 
@@ -145,11 +145,9 @@ A comprehensive 163-test suite covering unit, integration, and report-generation
 - **DKIM is not checked** — it lives under a selector-specific hostname (`selector._domainkey.domain.com`) with no way to know a domain's selector without prior knowledge, so any check would just be guessing at common selector names rather than reporting a real result. SPF and DMARC are checked.
 - **GitLab is frequently unreachable via plain scripted requests** — sits behind aggressive Cloudflare bot protection that 403s even known-real accounts under normal conditions; expect it to show up as `unclear` more often than other platforms.
 - **Subdomain enumeration is passive-only** (Certificate Transparency logs) — it will miss subdomains that never had a public HTTPS certificate issued.
-- **Domain recon requests are still sequential** — only username enumeration was moved to a thread pool so far.
 
 ## Roadmap
 
-- [ ] Concurrent domain recon requests (`ThreadPoolExecutor`)
 - [ ] `--verbose`/`--quiet` logging levels in place of flat `print()`
 - [ ] Config file for tunable constants (timeouts, retry limits, risk weights)
 - [ ] Favicon hashing for Shodan-style fingerprinting
